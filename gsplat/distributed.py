@@ -269,71 +269,83 @@ def _find_free_port():
     return port
 
 
+# 在每个进程上执行传入的 fn 函数，同时确保进程的设备设置、同步、和资源释放正确无误
 def _distributed_worker(
-    world_rank: int,
-    world_size: int,
-    fn: Callable,
-    args: Any,
-    local_rank: Optional[int] = None,
-    verbose: bool = False,
+    world_rank: int,    # 当前进程的全局编号
+    world_size: int,    # 总进程数
+    fn: Callable,   # 要执行的任务函数
+    args: Any,      # 传入 fn 的参数
+    local_rank: Optional[int] = None,   # 当前进程在 本节点中的GPU设备编号（多节点时有值，单节点为None）
+    verbose: bool = False,  # 是否输出日志信息
 ) -> bool:
-    if local_rank is None:  # single Node
+    if local_rank is None:  # 单节点（多GPU 或 单GPU），则当前进程在 本节点中的GPU设备编号 = 当前进程的全局编号
         local_rank = world_rank
     if verbose:
         print("Distributed worker: %d / %d" % (world_rank + 1, world_size))
     distributed = world_size > 1
-    if distributed:
-        torch.cuda.set_device(local_rank)
-        torch.distributed.init_process_group(
+    if distributed: # 如果是分布式运行
+        torch.cuda.set_device(local_rank)   # 设置每个进程的 GPU 设备
+        torch.distributed.init_process_group(   # 初始化进程组，以使用 NCCL 作为通信后端，确保进程之间可以高效通信
             backend="nccl", world_size=world_size, rank=world_rank
         )
         # Dump collection that participates all ranks.
         # This initializes the communicator required by `batch_isend_irecv`.
         # See: https://github.com/pytorch/pytorch/pull/74701
         _ = [None for _ in range(world_size)]
-        torch.distributed.all_gather_object(_, 0)
+        torch.distributed.all_gather_object(_, 0)   # 确保所有进程的通信初始化同步，避免单个进程提前开始任务
+
+    # 执行函数
     fn(local_rank, world_rank, world_size, args)
+
     if distributed:
-        torch.distributed.barrier()
-        torch.distributed.destroy_process_group()
+        torch.distributed.barrier()     # 确保所有进程在执行结束时同步等待，避免有些进程提前退出
+        torch.distributed.destroy_process_group()   # 释放进程组资源，确保分布式任务结束后不残留进程或资源占用
     if verbose:
         print("Job Done for worker: %d / %d" % (world_rank + 1, world_size))
     return True
 
 
 def cli(fn: Callable, args: Any, verbose: bool = False) -> bool:
-    """Wrapper to run a function in a distributed environment.
+    """
+    用于在分布式环境中运行函数的封装器：将传入的函数 fn 作为分布式进程，在多节点 多GPU上高效地执行
+        fn:     要运行的函数
+        args:   传入 fn 的参数
+        verbose: 是否输出日志信息
 
-    The function `fn` should have the following signature:
-
-    ```python
-    def fn(local_rank: int, world_rank: int, world_size: int, args: Any) -> None:
-        pass
-    ```
-
-    Usage:
-
-    ```python
-    # Launch with "CUDA_VISIBLE_DEVICES=0,1,2,3 python my_script.py"
-    if __name__ == "__main__":
-        cli(fn, None, verbose=True)
-    ```
+    传入的函数`fn`需要具备的结构：
+        ```python
+        def fn(local_rank: int, world_rank: int, world_size: int, args: Any) -> None:
+            pass
+        ```
+    使用方法：
+        ```python
+        # Launch with "CUDA_VISIBLE_DEVICES=0,1,2,3 python my_script.py"
+        if __name__ == "__main__":
+            cli(fn, None, verbose=True)
+        ```
     """
     assert torch.cuda.is_available(), "CUDA device is required!"
-    if "OMPI_COMM_WORLD_SIZE" in os.environ:  # multi-node
-        local_rank = int(os.environ["OMPI_COMM_WORLD_LOCAL_RANK"])
-        world_size = int(os.environ["OMPI_COMM_WORLD_SIZE"])  # dist.get_world_size()
-        world_rank = int(os.environ["OMPI_COMM_WORLD_RANK"])  # dist.get_rank()
+    if "OMPI_COMM_WORLD_SIZE" in os.environ:
+        # 1. 如果在多节点上运行
+        local_rank = int(os.environ["OMPI_COMM_WORLD_LOCAL_RANK"])                      # 当前进程在 本节点中的GPU设备编号
+        world_size = int(os.environ["OMPI_COMM_WORLD_SIZE"])  # dist.get_world_size()   # 所有节点上的总进程数（一个进程1个GPU）
+        world_rank = int(os.environ["OMPI_COMM_WORLD_RANK"])  # dist.get_rank()         # 当前进程的 全局编号
+        # 分布式运行 fn
         return _distributed_worker(
             world_rank, world_size, fn, args, local_rank, verbose
         )
 
-    world_size = torch.cuda.device_count()
+    # 2. 如果在单节点上运行
+    world_size = torch.cuda.device_count()  # 总进程数 = 该节点的GPU数
     distributed = world_size > 1
 
     if distributed:
+        # 2.1 单节点 多GPU
+        # 配置分布式环境变量 “MASTER_ADDR” 和 “MASTER_PORT”
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = str(_find_free_port())
+        # 使用 torch.multiprocessing.spawn 启动多个进程，一个GPU一个进程，并在每个进程上运行 fn
+        # spawn 会启动一个 process_context，所有子进程都加入该上下文中。在执行过程中，try-except 结构用于捕获键盘中断信号（如 Ctrl+C）。中断时，函数会显式终止所有子进程，避免它们在主进程结束后继续运行。
         process_context = torch.multiprocessing.spawn(
             _distributed_worker,
             args=(world_size, fn, args, None, verbose),
@@ -357,4 +369,5 @@ def cli(fn: Callable, args: Any, verbose: bool = False) -> bool:
                     print("process " + str(i) + " finished")
         return True
     else:
+        # 2.2 单节点 单GPU，单进程运行 fn
         return _distributed_worker(0, 1, fn=fn, args=args)
