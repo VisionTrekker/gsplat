@@ -47,124 +47,93 @@ from gsplat.optimizers import SelectiveAdam
 
 @dataclass
 class Config:
-    # Disable viewer
-    disable_viewer: bool = False
-    # Path to the .pt files. If provide, it will skip training and run evaluation only.
-    ckpt: Optional[List[str]] = None
-    # Name of compression strategy to use
-    compression: Optional[Literal["png"]] = None
-    # Render trajectory path
-    render_traj_path: str = "interp"
 
-    # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "data/360_v2/garden"
-    # Downsample factor for the dataset
-    data_factor: int = 4
-    # Directory to save results
-    result_dir: str = "results/garden"
-    # Every N images there is a test image
-    test_every: int = 8
-    # Random crop size for training  (experimental)
-    patch_size: Optional[int] = None
-    # A global scaler that applies to the scene size related parameters
-    global_scale: float = 1.0
-    # Normalize the world space
-    normalize_world_space: bool = True
-    # Camera model
+    disable_viewer: bool = False    # 是否关闭 Viewer
+
+    ckpt: Optional[List[str]] = None    # .pt的读取路径。若提供，则跳过训练，只评测    Optional[X] = None <==> Union[X, None]: 允许变量是 X 或 None
+
+    compression: Optional[Literal["png"]] = None    # 压缩方法名称    Literal[X]: 限制变量的值只能是 X
+
+    render_traj_path: str = "interp"    # 要渲染的轨迹文件路径
+
+    data_dir: str = "data/360_v2/garden"    # 输入数据集路径
+    data_factor: int = 4    # 图片下采样的倍率
+    result_dir: str = "results/garden"      # 结果保存路径
+
+    test_every: int = 8     # 测试图片的采样频率，每8取1
+
+    patch_size: Optional[int] = None    # 随机裁剪的尺寸 (experimental)
+
+    global_scale: float = 1.0           # 相对于场景尺寸的 全局调节因子
+
+    normalize_world_space: bool = True  # Normalize the world space
+
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
 
-    # Port for the viewer server
-    port: int = 8080
+    port: int = 8080    # Viewer的端口号
 
-    # Batch size for training. Learning rates are scaled automatically
-    batch_size: int = 1
-    # A global factor to scale the number of training steps
-    steps_scaler: float = 1.0
+    batch_size: int = 1     # 训练时的 batch size，学习率会根据其值自动调整
 
-    # Number of training steps
-    max_steps: int = 30_000
-    # Steps to evaluate the model
+    steps_scaler: float = 1.0   # 调整迭代次数的 全局因子（倍数）
+
+    max_steps: int = 30_000     # 总迭代次数
     eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
-    # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
-    # Initialization strategy
-    init_type: str = "sfm"
-    # Initial number of GSs. Ignored if using sfm
-    init_num_pts: int = 100_000
-    # Initial extent of GSs as a multiple of the camera extent. Ignored if using sfm
-    init_extent: float = 3.0
-    # Degree of spherical harmonics
-    sh_degree: int = 3
-    # Turn on another SH degree every this steps
-    sh_degree_interval: int = 1000
-    # Initial opacity of GS
-    init_opa: float = 0.1
-    # Initial scale of GS
-    init_scale: float = 1.0
-    # Weight for SSIM loss
-    ssim_lambda: float = 0.2
+    init_type: str = "sfm"      # 初始化方法名称
+    init_num_pts: int = 100_000     # 初始高斯个数（如果使用 SfM，则无效）
+    init_extent: float = 3.0    # 初始高斯的范围 是相机范围的倍数（如果使用 SfM，则无效）
 
-    # Near plane clipping distance
-    near_plane: float = 0.01
-    # Far plane clipping distance
+    sh_degree: int = 3
+    sh_degree_interval: int = 1000
+
+    init_opa: float = 0.1       # 初始高斯的 不透明度
+    init_scale: float = 1.0     # 初始高斯的 轴长
+
+    ssim_lambda: float = 0.2    # loss中 SSIM的权重
+
+    near_plane: float = 0.01    # 近平面距离
     far_plane: float = 1e10
 
-    # Strategy for GS densification
+    # 增稠方法
     strategy: Union[DefaultStrategy, MCMCStrategy] = field(
         default_factory=DefaultStrategy
     )
-    # Use packed mode for rasterization, this leads to less memory usage but slightly slower.
-    packed: bool = False
-    # Use sparse gradients for optimization. (experimental)
-    sparse_grad: bool = False
-    #! Use visible adam from Taming 3DGS. (experimental)
-    visible_adam: bool = False
-    # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
-    antialiased: bool = False
 
-    # Use random background for training to discourage transparency
-    random_bkgd: bool = False
+    packed: bool = False    # 是否在光栅器中使用 “packed 模式”（会降低显存使用，但是会慢一点）
 
-    # Opacity regularization
-    opacity_reg: float = 0.0
-    # Scale regularization
-    scale_reg: float = 0.0
+    sparse_grad: bool = False   # 是否在优化中使用 “sparse gradients” (experimental)
 
-    # Enable camera optimization.
-    pose_opt: bool = False
-    # Learning rate for camera optimization
-    pose_opt_lr: float = 1e-5
-    # Regularization for camera optimization as weight decay
-    pose_opt_reg: float = 1e-6
-    # Add noise to camera extrinsics. This is only to test the camera pose optimization.
-    pose_noise: float = 0.0
+    visible_adam: bool = False  # 是否使用 Taming-3DGS 的 “Visible Adam” (experimental)
 
-    # Enable appearance optimization. (experimental)
-    app_opt: bool = False
-    # Appearance embedding dimension
-    app_embed_dim: int = 16
-    # Learning rate for appearance optimization
-    app_opt_lr: float = 1e-3
-    # Regularization for appearance optimization as weight decay
-    app_opt_reg: float = 1e-6
+    antialiased: bool = False   # 是否在光栅器中使用 “Anti-aliasing”（轻微降低评测指标）
 
-    # Enable bilateral grid. (experimental)
-    use_bilateral_grid: bool = False
-    # Shape of the bilateral grid (X, Y, W)
-    bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)
+    random_bkgd: bool = False   # 在训练中使用 随机背景颜色（discourage transparency）
 
-    # Enable depth loss. (experimental)
-    depth_loss: bool = False
-    # Weight for depth loss
-    depth_lambda: float = 1e-2
+    opacity_reg: float = 0.0    # 不透明度 正则化
+    scale_reg: float = 0.0      # 轴长 正则化
 
-    # Dump information to tensorboard every this steps
-    tb_every: int = 100
-    # Save training images to tensorboard
-    tb_save_image: bool = False
+    pose_opt: bool = False      # 是否开启 相机优化
+    pose_opt_lr: float = 1e-5   # 相机优化的 学习率
+    pose_opt_reg: float = 1e-6  # 相机优化正则化的 权重衰减
+    pose_noise: float = 0.0     # 是否在相机外参中添加噪声（仅用于测试相机位姿优化）
 
-    lpips_net: Literal["vgg", "alex"] = "alex"
+    app_opt: bool = False       # 是否开启光照一致性优化 (experimental)
+    app_embed_dim: int = 16     # 光照一致性优化的 “embedding” 维度
+    app_opt_lr: float = 1e-3    # 光照一致性优化的 学习率
+    app_opt_reg: float = 1e-6   # 光照一致性优化正则化的 权重衰减
+
+    use_bilateral_grid: bool = False    # 是否开启 “bilateral grid” (experimental)
+    bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)    # “bilateral grid”的维度 (X, Y, W)
+
+    depth_loss: bool = False    # 是否使用深度loss (experimental)
+    depth_lambda: float = 1e-2  # 深度loss的 权重
+
+    tb_every: int = 100     # 每...步将信息写入 tensorboard
+
+    tb_save_image: bool = False     # 是否保存训练图像到 tensorboard
+
+    lpips_net: Literal["vgg", "alex"] = "alex"  # lpips网络名称
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -280,10 +249,10 @@ class Runner:
     ) -> None:
         set_random_seed(42 + local_rank)
 
-        self.cfg = cfg
-        self.world_rank = world_rank
-        self.local_rank = local_rank
-        self.world_size = world_size
+        self.cfg = cfg  # Config对象，包含所有配置参数
+        self.world_rank = world_rank    # 当前进程的 全局编号
+        self.local_rank = local_rank    # 当前进程在 本节点中的GPU设备编号
+        self.world_size = world_size    # 总进程数
         self.device = f"cuda:{local_rank}"
 
         # Where to dump results.
@@ -1055,15 +1024,23 @@ class Runner:
 
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
-    if world_size > 1 and not cfg.disable_viewer:
+    """
+        local_rank: 当前进程在 本节点中的GPU设备编号
+        world_rank: 当前进程的 全局编号（用于分布式训练）
+        world_size: 总进程数
+        cfg:        Config对象，包含所有配置参数
+    """
+    if world_size > 1 and not cfg.disable_viewer:   # 分布式运行，则需关闭Viewer（用于渲染和显示），以避免进程间冲突
         cfg.disable_viewer = True
-        if world_rank == 0:
+        if world_rank == 0: # 在主进程中打印提示信息
             print("Viewer is disabled in distributed training.")
 
+    # 1. 创建 Runner 实例
     runner = Runner(local_rank, world_rank, world_size, cfg)
 
     if cfg.ckpt is not None:
-        # run eval only
+        # 2.1 eval
+        # 加载ckpt中的权重，并将每个权重的“splats”部分合并到 runner的“splats”中
         ckpts = [
             torch.load(file, map_location=runner.device, weights_only=True)
             for file in cfg.ckpt
@@ -1071,13 +1048,18 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         for k in runner.splats.keys():
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
+        # 评估
         runner.eval(step=step)
+        # 加载轨迹渲染图像
         runner.render_traj(step=step)
+        # 压缩模型
         if cfg.compression is not None:
             runner.run_compression(step=step)
     else:
+        # 2.2 训练
         runner.train()
 
+    # 3. 训练完成后，Viewer等待关闭
     if not cfg.disable_viewer:
         print("Viewer running... Ctrl+C to exit.")
         time.sleep(1000000)
@@ -1116,11 +1098,12 @@ if __name__ == "__main__":
             ),
         ),
     }
-    cfg = tyro.extras.overridable_config_cli(configs)
+    # 经命令行输入参数 覆盖后的 configs
+    cfg = tyro.extras.overridable_config_cli(configs)   # overridable_config_cli 将默认参数对象 configs 转换成命令行接口（CLI），并将命令行输入的参数 覆盖configs中的默认参数
+    # 根据倍数因子 调整 训练迭代次数
     cfg.adjust_steps(cfg.steps_scaler)
 
-    # try import extra dependencies
-    if cfg.compression == "png":
+    if cfg.compression == "png":    # 若使用 "Png Compression" 压缩方法，则尝试引入额外依赖
         try:
             import plas
             import torchpq
@@ -1131,4 +1114,5 @@ if __name__ == "__main__":
                 "and plas (via 'pip install git+https://github.com/fraunhoferhhi/PLAS.git') "
             )
 
+    # 在多节点 多GPU上运行 main 函数
     cli(main, cfg, verbose=True)
