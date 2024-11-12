@@ -29,12 +29,14 @@ from fused_ssim import fused_ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
 from utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+from gsplat.utils import normalized_quat_to_rotmat
 from lib_bilagrid import (
     BilateralGrid,
     slice,
     color_correct,
     total_variation_loss,
 )
+from plyfile import PlyData, PlyElement
 
 from gsplat.compression import PngCompression
 from gsplat.distributed import cli
@@ -116,7 +118,7 @@ class Config:
     packed: bool = False
     # Use sparse gradients for optimization. (experimental)
     sparse_grad: bool = False
-    # Use visible adam from Taming 3DGS. (experimental)
+    #! Use visible adam from Taming 3DGS. (experimental)
     visible_adam: bool = False
     # Anti-aliasing in rasterization. Might slightly hurt quantitative metrics.
     antialiased: bool = False
@@ -807,6 +809,8 @@ class Runner:
                 self.eval(step)
                 self.render_traj(step)
 
+                self.save_ply(os.path.join(cfg.result_dir, "point_cloud/iteration_{}.ply".format(step)))
+
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
                 self.run_compression(step=step)
@@ -821,6 +825,42 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
+
+    # Experimental
+    def construct_list_of_attributes(self):
+        l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+        # All channels except the 3 DC
+        for i in range(self.splats["sh0"].shape[1]*self.splats["sh0"].shape[2]):
+            l.append('f_dc_{}'.format(i))
+        for i in range(self.splats["shN"].shape[1]*self.splats["shN"].shape[2]):
+            l.append('f_rest_{}'.format(i))
+        l.append('opacity')
+        for i in range(self.splats["scales"].shape[1]):
+            l.append('scale_{}'.format(i))
+        for i in range(self.splats["quats"].shape[1]):
+            l.append('rot_{}'.format(i))
+        return l
+
+    # Experimental
+    @torch.no_grad()
+    def save_ply(self, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        xyz = self.splats["means"].detach().cpu().numpy()
+        normals = np.zeros_like(xyz)
+        f_dc = self.splats["sh0"].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        f_rest = self.splats["shN"].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        opacities = self.splats["opacities"].detach().unsqueeze(-1).cpu().numpy()
+        scale = self.splats["scales"].detach().cpu().numpy()
+        rotation = self.splats["quats"].detach().cpu().numpy()
+
+        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)
 
     @torch.no_grad()
     def eval(self, step: int, stage: str = "val"):
