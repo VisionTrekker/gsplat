@@ -54,7 +54,7 @@ class Config:
 
     compression: Optional[Literal["png"]] = None    # 压缩方法名称    Literal[X]: 限制变量的值只能是 X
 
-    render_traj_path: str = "interp"    # 要渲染的轨迹文件路径
+    render_traj_path: str = "interp"    # 渲染图像的轨迹类型。可选 interp、ellipse、spiral
 
     data_dir: str = "data/360_v2/garden"    # 输入数据集路径
     data_factor: int = 4    # 图片下采样的倍率
@@ -100,7 +100,7 @@ class Config:
         default_factory=DefaultStrategy
     )
 
-    packed: bool = False    # 是否在光栅器中使用 “packed 模式”（会降低显存使用，但是会慢一点）
+    packed: bool = False    # 是否在光栅器中使用 “packed 模式”（会降低显存使用量，但是会慢一点。但多卡时因减少GPU之间的数据传输，会加快训练速度）
 
     sparse_grad: bool = False   # 是否在优化中使用 “sparse gradients” (experimental)
 
@@ -110,8 +110,8 @@ class Config:
 
     random_bkgd: bool = False   # 在训练中使用 随机背景颜色（discourage transparency）
 
-    opacity_reg: float = 0.0    # 不透明度 正则化
-    scale_reg: float = 0.0      # 轴长 正则化
+    opacity_reg: float = 0.0    # 不透明度 损失权重
+    scale_reg: float = 0.0      # 轴长 损失权重
 
     pose_opt: bool = False      # 是否开启 相机优化
     pose_opt_lr: float = 1e-5   # 相机优化的 学习率
@@ -546,8 +546,8 @@ class Runner:
             image_ids = data["image_id"].to(device)
             masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
             if cfg.depth_loss:
-                points = data["points"].to(device)  # [1, M, 2]
-                depths_gt = data["depths"].to(device)  # [1, M]
+                points = data["points"].to(device)  # 当前图像3D点的像素坐标，[1, M, 2]
+                depths_gt = data["depths"].to(device)  # 当前图像3D点的深度值，[1, M]
 
             height, width = pixels.shape[1:3]
 
@@ -914,22 +914,26 @@ class Runner:
 
     @torch.no_grad()
     def render_traj(self, step: int):
-        """Entry for trajectory rendering."""
+        """根据轨迹渲染"""
         print("Running trajectory rendering...")
         cfg = self.cfg
         device = self.device
 
+        # 所有相机的位姿（外参矩阵 C2W，不要开头和结尾的5个）
         camtoworlds_all = self.parser.camtoworlds[5:-5]
         if cfg.render_traj_path == "interp":
+            # 插值
             camtoworlds_all = generate_interpolated_path(
                 camtoworlds_all, 1
             )  # [N, 3, 4]
         elif cfg.render_traj_path == "ellipse":
+            # 椭圆轨迹
             height = camtoworlds_all[:, 2, 3].mean()
             camtoworlds_all = generate_ellipse_path_z(
                 camtoworlds_all, height=height
             )  # [N, 3, 4]
         elif cfg.render_traj_path == "spiral":
+            # 螺旋式上升
             camtoworlds_all = generate_spiral_path(
                 camtoworlds_all,
                 bounds=self.parser.bounds * self.scene_scale,
@@ -1100,7 +1104,7 @@ if __name__ == "__main__":
     }
     # 经命令行输入参数 覆盖后的 configs
     cfg = tyro.extras.overridable_config_cli(configs)   # overridable_config_cli 将默认参数对象 configs 转换成命令行接口（CLI），并将命令行输入的参数 覆盖configs中的默认参数
-    # 根据倍数因子 调整 训练迭代次数
+    # 根据倍数因子 调整 所有迭代次数（当使用4卡时，该值为 0.25。原因：4个GPU相当于batch size为4，因此迭代次数也应相应缩小4倍，以保持整体训练量不变）
     cfg.adjust_steps(cfg.steps_scaler)
 
     if cfg.compression == "png":    # 若使用 "Png Compression" 压缩方法，则尝试引入额外依赖

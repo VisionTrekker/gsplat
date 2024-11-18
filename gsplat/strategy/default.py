@@ -31,33 +31,22 @@ class DefaultStrategy(Strategy):
     with `absgrad=True` as well so that the absolute gradients are computed.
 
     Args:
-        prune_opa (float): GSs with opacity below this value will be pruned. Default is 0.005.
-        grow_grad2d (float): GSs with image plane gradient above this value will be
-          split/duplicated. Default is 0.0002.
-        grow_scale3d (float): GSs with 3d scale (normalized by scene_scale) below this
-          value will be duplicated. Above will be split. Default is 0.01.
-        grow_scale2d (float): GSs with 2d scale (normalized by image resolution) above
-          this value will be split. Default is 0.05.
-        prune_scale3d (float): GSs with 3d scale (normalized by scene_scale) above this
-          value will be pruned. Default is 0.1.
-        prune_scale2d (float): GSs with 2d scale (normalized by image resolution) above
-          this value will be pruned. Default is 0.15.
-        refine_scale2d_stop_iter (int): Stop refining GSs based on 2d scale after this
-          iteration. Default is 0. Set to a positive value to enable this feature.
-        refine_start_iter (int): Start refining GSs after this iteration. Default is 500.
-        refine_stop_iter (int): Stop refining GSs after this iteration. Default is 15_000.
-        reset_every (int): Reset opacities every this steps. Default is 3000.
-        refine_every (int): Refine GSs every this steps. Default is 100.
-        pause_refine_after_reset (int): Pause refining GSs until this number of steps after
-          reset, Default is 0 (no pause at all) and one might want to set this number to the
-          number of images in training set.
-        absgrad (bool): Use absolute gradients for GS splitting. Default is False.
-        revised_opacity (bool): Whether to use revised opacity heuristic from
-          arXiv:2404.06109 (experimental). Default is False.
-        verbose (bool): Whether to print verbose information. Default is False.
-        key_for_gradient (str): Which variable uses for densification strategy.
-          3DGS uses "means2d" gradient and 2DGS uses a similar gradient which stores
-          in variable "gradient_2dgs".
+        prune_opa (float):          剪枝中的 不透明度阈值，< 该值，则高斯被剪枝。默认为 0.005
+        grow_grad2d (float):    增稠中 高斯中心2D投影位置梯度阈值，> 该值，则被克隆或分裂。默认为 0.0002
+        grow_scale3d (float):   增稠中 高斯3D轴长阈值，< 该值*场景尺寸，则被复制；> 该值*场景尺寸，则被分裂。默认为 0.01
+        grow_scale2d (float):   增稠中 高斯2D轴长阈值，> 该值*图像分辨率，则被分裂。默认为 0.05
+        prune_scale3d (float):      剪枝中的 高斯3D轴长阈值，> 该值*场景尺寸，则被剪枝。默认为 0.1
+        prune_scale2d (float):      剪枝中的 高斯2D轴长阈值，> 该值*图像分辨率，则被剪枝。默认为 0.15
+        refine_scale2d_stop_iter (int): 基于高斯2D轴长细化高斯的 终止迭代次数。默认为 0
+        refine_start_iter (int):        细化高斯的 开始迭代次数。默认为 500
+        refine_stop_iter (int):         细化高斯的 终止迭代次数。默认为 15_000
+        reset_every (int):      重置不透明度的迭代间隔。默认为 3000
+        refine_every (int):     增稠的迭代间隔。默认为 100
+        pause_refine_after_reset (int): 重置后的暂停增稠高斯的迭代次数。默认为 0，不暂停；有的方法将该值设为 训练集中图像个数
+        absgrad (bool):         在分裂高斯时 是否使用 绝对梯度。默认为 False
+        revised_opacity (bool): 是否使用 arXiv:2404.06109 论文中提出的 修正不透明度。默认为 False
+        verbose (bool):         是否打印详细信息。默认为 False
+        key_for_gradient (str):  使用的增稠方案。3DGS使用 "means2d"梯度、2DGS使用类似的梯度 "gradient_2dgs"
 
     Examples:
 
@@ -114,20 +103,18 @@ class DefaultStrategy(Strategy):
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
     ):
-        """Sanity check for the parameters and optimizers.
+        """健全性（Sanity）检查，检查参数和优化器是否正确配置
 
         Check if:
-            * `params` and `optimizers` have the same keys.
-            * Each optimizer has exactly one param_group, corresponding to each parameter.
-            * The following keys are present: {"means", "scales", "quats", "opacities"}.
+            * `params`和`optimizers` 有相同的 keys.
+            * 每个优化器有且只有 param_group，与每个参数一一对应
+            * 存在以下 keys: {"means", "scales", "quats", "opacities"}.
 
         Raises:
             AssertionError: If any of the above conditions is not met.
 
         .. note::
-            It is not required but highly recommended for the user to call this function
-            after initializing the strategy to ensure the convention of the parameters
-            and optimizers is as expected.
+            这个检查功能不是必须得，但强烈建议在初始化 strategy 后，调用该函数以确保参数和优化器配置正确
         """
 
         super().check_sanity(params, optimizers)
