@@ -53,7 +53,7 @@ class Parser:
         manager.load_images()
         manager.load_points3D()
 
-        # Extract extrinsic matrices in world-to-camera format.
+        # 读取 所有相机的外参矩阵（转换成 W2C）
         imdata = manager.images
         w2c_mats = []
         camera_ids = []
@@ -119,7 +119,7 @@ class Parser:
         w2c_mats = np.stack(w2c_mats, axis=0)
 
         # Convert extrinsics to camera-to-world.
-        camtoworlds = np.linalg.inv(w2c_mats)
+        camtoworlds = np.linalg.inv(w2c_mats)   # 所有相机的位姿（外参矩阵 C2W）
 
         # Image names from COLMAP. No need for permuting the poses according to
         # image names anymore.
@@ -364,11 +364,11 @@ class Dataset:
             worldtocams = np.linalg.inv(camtoworlds)
             image_name = self.parser.image_names[index]
             point_indices = self.parser.point_indices[image_name]
-            points_world = self.parser.points[point_indices]
+            points_world = self.parser.points[point_indices]    # 当前图像的3D点
             points_cam = (worldtocams[:3, :3] @ points_world.T + worldtocams[:3, 3:4]).T
-            points_proj = (K @ points_cam.T).T
-            points = points_proj[:, :2] / points_proj[:, 2:3]  # (M, 2)
-            depths = points_cam[:, 2]  # (M,)
+            points_proj = (K @ points_cam.T).T  # 归一化平面
+            points = points_proj[:, :2] / points_proj[:, 2:3]  # 像素平面坐标，(M, 2)
+            depths = points_cam[:, 2]  # 深度值，(M,)
             # filter out points outside the image
             selector = (
                 (points[:, 0] >= 0)

@@ -210,19 +210,17 @@ def generate_interpolated_path(
     smoothness: float = 0.03,
     rot_weight: float = 0.1,
 ):
-    """Creates a smooth spline path between input keyframe camera poses.
-
-    Spline is calculated with poses in format (position, lookat-point, up-point).
+    """在输入的关键帧位姿之间创建一个平滑的曲线。曲线由格式（位置、注视点、up-point）的位姿计算
 
     Args:
-      poses: (n, 3, 4) array of input pose keyframes.
-      n_interp: returned path will have n_interp * (n - 1) total poses.
-      spline_degree: polynomial degree of B-spline.
-      smoothness: parameter for spline smoothing, 0 forces exact interpolation.
-      rot_weight: relative weighting of rotation/translation in spline solve.
+      poses:    输入关键帧的 位姿（C2W） 数组。(n, 3, 4)
+      n_interp: 返回的路径将包含 n_interp * (n - 1) 个总位姿
+      spline_degree:    B-曲线 多项式阶数
+      smoothness:   曲线平滑参数，0 表示强制精确插值
+      rot_weight:   在曲线求解中 渲染和平移的相对权重
 
     Returns:
-      Array of new camera poses with shape (n_interp * (n - 1), 3, 4).
+      新相机位姿数组。(n_interp * (n - 1), 3, 4)
     """
 
     def poses_to_points(poses, dist):
