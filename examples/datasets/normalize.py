@@ -3,11 +3,9 @@ import numpy as np
 
 def similarity_from_cameras(c2w, strict_scaling=False, center_method="focus"):
     """
-    reference: nerf-factory
-    Get a similarity transform to normalize dataset
-    from c2w (OpenCV convention) cameras
-    :param c2w: (N, 4)
-    :return T (4,4) , scale (float)
+    从相机位姿（C2W）中获取一个相似性变换矩阵，用于归一化场景
+        c2w: 所有相机的 C2W外参变换矩阵 (N, 4)
+        返回：T (4,4) , scale (float)
     """
     t = c2w[:, :3, 3]
     R = c2w[:, :3, :3]
