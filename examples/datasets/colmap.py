@@ -18,11 +18,12 @@ from .normalize import (
 
 
 def _get_rel_paths(path_dir: str) -> List[str]:
-    """Recursively get relative paths of files in a directory."""
+    """递归获取 输入文件夹下所有文件的相对路径"""
     paths = []
-    for dp, dn, fn in os.walk(path_dir):
+    # 遍历path_dir文件夹及其所有子文件夹
+    for dp, dn, fn in os.walk(path_dir):    # dp:当前文件夹路径; dn:当前文件夹中所有子文件夹名; fn:当前文件夹中所有文件名
         for f in fn:
-            paths.append(os.path.relpath(os.path.join(dp, f), path_dir))
+            paths.append(os.path.relpath(os.path.join(dp, f), path_dir))    # 添加所有文件的相对路径
     return paths
 
 
@@ -36,10 +37,10 @@ class Parser:
         normalize: bool = False,
         test_every: int = 8,
     ):
-        self.data_dir = data_dir
-        self.factor = factor
-        self.normalize = normalize
-        self.test_every = test_every
+        self.data_dir = data_dir    # 输入文件夹
+        self.factor = factor        # 图片下采样的倍率
+        self.normalize = normalize  #
+        self.test_every = test_every    # 测试图片的采样频率，每8取1
 
         colmap_dir = os.path.join(data_dir, "sparse/0/")
         if not os.path.exists(colmap_dir):
@@ -48,40 +49,41 @@ class Parser:
             colmap_dir
         ), f"COLMAP directory {colmap_dir} does not exist."
 
-        manager = SceneManager(colmap_dir)
-        manager.load_cameras()
-        manager.load_images()
-        manager.load_points3D()
+        manager = SceneManager(colmap_dir)  # 实例化一个SceneManager对象，管理COLMAP项目 colmap_dir 中的文件和数据
+        manager.load_cameras()  # 读取内参 cameras.bin
+        manager.load_images()   # 读取外餐 images.bin
+        manager.load_points3D() # 读取3D点云 points.bin
 
         # 读取 所有相机的外参矩阵（转换成 W2C）
         imdata = manager.images
-        w2c_mats = []
-        camera_ids = []
-        Ks_dict = dict()
-        params_dict = dict()
-        imsize_dict = dict()  # width, height
+        w2c_mats = []       # 所有相机的 W2C变换矩阵
+        camera_ids = []     # 所有相机的 相机ID
+        Ks_dict = dict()    # 所有相机 经下采样倍率调整后的 内参矩阵
+        params_dict = dict()    # 所有相机的 畸变参数
+        imsize_dict = dict()    # 所有相机 经下采样倍率调整后的 宽高
         mask_dict = dict()
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
+        # 遍历所有相机外参
         for k in imdata:
             im = imdata[k]
             rot = im.R()
             trans = im.tvec.reshape(3, 1)
-            w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0)
+            w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0) # W2C的变换矩阵 (4,4)
             w2c_mats.append(w2c)
 
-            # support different camera intrinsics
-            camera_id = im.camera_id
+            # 支持多个相机内参
+            camera_id = im.camera_id    # 每个图像都有一个相机ID，可以是相同的相机
             camera_ids.append(camera_id)
 
-            # camera intrinsics
+            # 获取 当前相机内参
             cam = manager.cameras[camera_id]
             fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-            K[:2, :] /= factor
+            K[:2, :] /= factor  # fx，fy，cx，cy 都要除以 factor
             Ks_dict[camera_id] = K
 
-            # Get distortion parameters.
-            type_ = cam.camera_type
+            # 获取 相机畸变参数
+            type_ = cam.camera_type     # 当前相机的 模型类型
             if type_ == 0 or type_ == "SIMPLE_PINHOLE":
                 params = np.empty(0, dtype=np.float32)
                 camtype = "perspective"
@@ -116,75 +118,78 @@ class Parser:
         if not (type_ == 0 or type_ == 1):
             print("Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
 
-        w2c_mats = np.stack(w2c_mats, axis=0)
+        w2c_mats = np.stack(w2c_mats, axis=0)   # (N,4,4)
 
-        # Convert extrinsics to camera-to-world.
-        camtoworlds = np.linalg.inv(w2c_mats)   # 所有相机的位姿（外参矩阵 C2W）
+        camtoworlds = np.linalg.inv(w2c_mats)   # 所有相机的 C2W变换矩阵矩阵
 
-        # Image names from COLMAP. No need for permuting the poses according to
-        # image names anymore.
+        # 获取所有相机的 图片名。不再需要根据图片名对位姿进行排序
         image_names = [imdata[k].name for k in imdata]
 
-        # Previous Nerf results were generated with images sorted by filename,
-        # ensure metrics are reported on the same test set.
-        inds = np.argsort(image_names)
+        # 之前的 NeRF 结果是按照文件名排序生成的，确保在相同的测试集上报告指标
+        # 根据图片名排序后的 图像名、位姿C2W、相机ID
+        inds = np.argsort(image_names)  # 对image_names排序后的索引
         image_names = [image_names[i] for i in inds]
         camtoworlds = camtoworlds[inds]
         camera_ids = [camera_ids[i] for i in inds]
 
-        # Load extended metadata. Used by Bilarf dataset.
+        # 加载 扩展数据（使用于Bilarf数据集）
         self.extconf = {
-            "spiral_radius_scale": 1.0,
-            "no_factor_suffix": False,
+            "spiral_radius_scale": 1.0, # 螺旋半径比例因子
+            "no_factor_suffix": False,  # 是否去除后缀
         }
         extconf_file = os.path.join(data_dir, "ext_metadata.json")
         if os.path.exists(extconf_file):
+            # 如果存在扩展数据，则用其更新 extconf
             with open(extconf_file) as f:
                 self.extconf.update(json.load(f))
 
-        # Load bounds if possible (only used in forward facing scenes).
+        # 加载 场景边界（只使用于前向场景）
         self.bounds = np.array([0.01, 1.0])
         posefile = os.path.join(data_dir, "poses_bounds.npy")
         if os.path.exists(posefile):
             self.bounds = np.load(posefile)[:, -2:]
 
-        # Load images.
+        # 加载 图像
         if factor > 1 and not self.extconf["no_factor_suffix"]:
             image_dir_suffix = f"_{factor}"
         else:
             image_dir_suffix = ""
         colmap_image_dir = os.path.join(data_dir, "images")
-        image_dir = os.path.join(data_dir, "images" + image_dir_suffix)
+        image_dir = os.path.join(data_dir, "images" + image_dir_suffix) # 例：garden/images_2
+        # 检查图像文件夹是否存在
         for d in [image_dir, colmap_image_dir]:
             if not os.path.exists(d):
                 raise ValueError(f"Image folder {d} does not exist.")
 
-        # Downsampled images may have different names vs images used for COLMAP,
-        # so we need to map between the two sorted lists of files.
-        colmap_files = sorted(_get_rel_paths(colmap_image_dir))
-        image_files = sorted(_get_rel_paths(image_dir))
+        # 获取图像路径。下采样后的图像可能与 COLMAP使用的图像 拥有不同的图像名，因此需要在两个文件排序列表之间映射
+        colmap_files = sorted(_get_rel_paths(colmap_image_dir)) # garden/images下所有图像的 相对路径
+        image_files = sorted(_get_rel_paths(image_dir))         # garden/images_2下所有图像的 相对路径
         colmap_to_image = dict(zip(colmap_files, image_files))
-        image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+        image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]    # 从COLMAP中获取的图像名，映射到下采样后的图像路径
 
-        # 3D points and {image_name -> [point_idx]}
+        # 获取 3D点云 和 每个图像中与点云关联的3D点索引{image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
-        points_err = manager.point3D_errors.astype(np.float32)
-        points_rgb = manager.point3D_colors.astype(np.uint8)
-        point_indices = dict()
+        points_err = manager.point3D_errors.astype(np.float32)  # 点云的 重投影误差
+        points_rgb = manager.point3D_colors.astype(np.uint8)    # 点云的 颜色
+        point_indices = dict()  # {"image_name_1.jpg": [point_idx_1, point_idx_2, ...], "image_name_2.jpg": [point_idx_3, point_idx_4, ...], ...}
 
-        image_id_to_name = {v: k for k, v in manager.name_to_image_id.items()}
-        for point_id, data in manager.point3D_id_to_images.items():
+        # 创建一个字典，将图像ID映射到图像名
+        image_id_to_name = {v: k for k, v in manager.name_to_image_id.items()}  # manager.name_to_image_id 表示图像名与图像ID的映射
+        # 遍历每个3D点，获取观测到该3D点的 相关图像数据
+        for point_id, data in manager.point3D_id_to_images.items(): # manager.point3D_id_to_images 表示每个3D点 被观测到的图像ID 以及 对应特征点的索引
+            # 遍历每个观测到该3D点的图像，将该3D点在点云中的索引添加到 对应图像的列表中
             for image_id, _ in data:
                 image_name = image_id_to_name[image_id]
-                point_idx = manager.point3D_id_to_point3D_idx[point_id]
-                point_indices.setdefault(image_name, []).append(point_idx)
+                point_idx = manager.point3D_id_to_point3D_idx[point_id]     # 将3D点ID 映射到 点云中3D点的索引，用于直接访问点云数据
+                point_indices.setdefault(image_name, []).append(point_idx)  # 在point_indices中为每个图像名初始化一个空list，并添加该3D点索引
         point_indices = {
-            k: np.array(v).astype(np.int32) for k, v in point_indices.items()
+            k: np.array(v).astype(np.int32) for k, v in point_indices.items()   # 将3D点索引列表 转换为 NumPy数组并指定数据类型为 int32，，提高存储效率和兼容性
         }
 
         # Normalize the world space.
         if normalize:
-            T1 = similarity_from_cameras(camtoworlds)
+            # 如果要进行归一化处理，
+            T1 = similarity_from_cameras(camtoworlds)   # 计算相机位姿的相似变换矩阵，用于将相机坐标系下的点云变换到归一化坐标系下
             camtoworlds = transform_cameras(T1, camtoworlds)
             points = transform_points(T1, points)
 
