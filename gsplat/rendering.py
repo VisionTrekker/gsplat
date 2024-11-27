@@ -46,7 +46,7 @@ def rasterization(
     render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
-    rasterize_mode: Literal["classic", "antialiased"] = "classic",
+    rasterize_mode: Literal["classic", "antialiased"] = "classic",  # 光栅器的类型，"classic" 或 "antialiased"
     channel_chunk: int = 32,
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
@@ -280,6 +280,7 @@ def rasterization(
     # and the rasterize computation over cameras. So first we gather the cameras
     # from all ranks for projection.
     if distributed:
+        # 分布式训练
         world_rank = torch.distributed.get_rank()
         world_size = torch.distributed.get_world_size()
 
@@ -293,7 +294,7 @@ def rasterization(
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
 
-    # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
+    # 将3D高斯投影到图像平面上，获取2D高斯投影。（输入{quats, scales}在光栅器内3D协方差矩阵 比 预计算它要快）
     proj_results = fully_fused_projection(
         means,
         covars,

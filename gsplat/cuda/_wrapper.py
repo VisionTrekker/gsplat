@@ -218,7 +218,7 @@ def fully_fused_projection(
     calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-    """Projects Gaussians to 2D.
+    """将3D高斯投影到2D图象平面上
 
     This function fuse the process of computing covariances
     (:func:`quat_scale_to_covar_preci()`), transforming to camera space (:func:`world_to_cam()`),
