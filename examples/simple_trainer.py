@@ -286,7 +286,7 @@ class Runner:
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
-        # Model
+        # 创建初始GS模型
         feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
@@ -349,6 +349,7 @@ class Runner:
 
         self.app_optimizers = []
         if cfg.app_opt:
+            # 使用外观一致性补偿模块
             assert feature_dim is not None
             self.app_module = AppearanceOptModule(
                 len(self.trainset), feature_dim, cfg.app_embed_dim, cfg.sh_degree
@@ -440,6 +441,7 @@ class Runner:
         else:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
+        # 光栅器的类型
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
             means=means,
@@ -521,7 +523,7 @@ class Runner:
         )
         trainloader_iter = iter(trainloader)
 
-        # Training loop.
+        # 循环训练
         global_tic = time.time()
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
@@ -532,7 +534,7 @@ class Runner:
                 tic = time.time()
 
             try:
-                data = next(trainloader_iter)
+                data = next(trainloader_iter)   # 获取当前迭代的 图像数据
             except StopIteration:
                 trainloader_iter = iter(trainloader)
                 data = next(trainloader_iter)
@@ -560,7 +562,7 @@ class Runner:
             # sh schedule
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
-            # forward
+            # 渲染（前向传播）
             renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,

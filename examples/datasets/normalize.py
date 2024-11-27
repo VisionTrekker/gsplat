@@ -3,9 +3,9 @@ import numpy as np
 
 def similarity_from_cameras(c2w, strict_scaling=False, center_method="focus"):
     """
-    从相机位姿（C2W）中获取一个相似性变换矩阵，用于归一化场景
+    计算 所有相机坐标轴 与 世界坐标轴 对齐的变换矩阵
         c2w: 所有相机的 C2W外参变换矩阵 (N,4,4)
-        返回：T (4,4) , scale (float)
+    返回：归一化后的 变换矩阵 T，(4,4)
     """
     t = c2w[:, :3, 3]
     R = c2w[:, :3, :3]
@@ -65,48 +65,37 @@ def similarity_from_cameras(c2w, strict_scaling=False, center_method="focus"):
 
 
 def align_principle_axes(point_cloud):
-    # Compute centroid
-    centroid = np.median(point_cloud, axis=0)
+    """计算点云对齐到其主轴（Z轴）的 变换矩阵"""
+    centroid = np.median(point_cloud, axis=0)   # 计算点云的质心
 
-    # Translate point cloud to centroid
-    translated_point_cloud = point_cloud - centroid
+    translated_point_cloud = point_cloud - centroid # 将点云平移到以质心为原点
 
-    # Compute covariance matrix
-    covariance_matrix = np.cov(translated_point_cloud, rowvar=False)
-
-    # Compute eigenvectors and eigenvalues
-    eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
-
-    # Sort eigenvectors by eigenvalues (descending order) so that the z-axis
-    # is the principal axis with the smallest eigenvalue.
+    covariance_matrix = np.cov(translated_point_cloud, rowvar=False)    # 计算平移后的点云的 协方差矩阵，将每一列视为一个变量
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)   # 计算协方差矩阵的 特征值和特征向量
+    # 按照特征值降序对特征向量排序，以便主轴（特征值最小的轴）成为 z 轴
     sort_indices = eigenvalues.argsort()[::-1]
     eigenvectors = eigenvectors[:, sort_indices]
 
-    # Check orientation of eigenvectors. If the determinant of the eigenvectors is
-    # negative, then we need to flip the sign of one of the eigenvectors.
+    # 检查特征向量的方向，如果特征向量的行列式小于 0，则将第一个特征向量的符号取反，以确保特征向量的方向一致。
     if np.linalg.det(eigenvectors) < 0:
         eigenvectors[:, 0] *= -1
 
-    # Create rotation matrix
+    # 创建旋转矩阵 = 特征向量的转置
     rotation_matrix = eigenvectors.T
 
-    # Create SE(3) matrix (4x4 transformation matrix)
+    # 创建 SE(3) 矩阵，（4,4）
     transform = np.eye(4)
     transform[:3, :3] = rotation_matrix
     transform[:3, 3] = -rotation_matrix @ centroid
 
     return transform
 
-
 def transform_points(matrix, points):
-    """Transform points using an SE(3) matrix.
-
-    Args:
-        matrix: 4x4 SE(3) matrix
-        points: Nx3 array of points
-
-    Returns:
-        Nx3 array of transformed points
+    """
+    使用 SE(3)变换矩阵 转换 3D点云
+        matrix: SE(3)变换矩阵，(4,4)
+        points: 3D点云，(N,3)
+    返回：变换后的 3D点云，(N,3)
     """
     assert matrix.shape == (4, 4)
     assert len(points.shape) == 2 and points.shape[1] == 3
@@ -114,14 +103,11 @@ def transform_points(matrix, points):
 
 
 def transform_cameras(matrix, camtoworlds):
-    """Transform cameras using an SE(3) matrix.
-
-    Args:
-        matrix: 4x4 SE(3) matrix
-        camtoworlds: Nx4x4 array of camera-to-world matrices
-
-    Returns:
-        Nx4x4 array of transformed camera-to-world matrices
+    """
+    使用 SE(3)变换矩阵 转换 相机位姿
+        matrix: SE(3)变换矩阵，(4,4)
+        camtoworlds: 多个相机位姿（C2W），(N,4,4)
+    返回：变换后的 相机位姿，(N,4,4)
     """
     assert matrix.shape == (4, 4)
     assert len(camtoworlds.shape) == 3 and camtoworlds.shape[1:] == (4, 4)

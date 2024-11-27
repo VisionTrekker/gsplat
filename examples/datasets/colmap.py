@@ -39,7 +39,7 @@ class Parser:
     ):
         self.data_dir = data_dir    # 输入文件夹
         self.factor = factor        # 图片下采样的倍率
-        self.normalize = normalize  #
+        self.normalize = normalize  # 是否对齐场景，包括图像位姿和点云
         self.test_every = test_every    # 测试图片的采样频率，每8取1
 
         colmap_dir = os.path.join(data_dir, "sparse/0/")
@@ -51,19 +51,19 @@ class Parser:
 
         manager = SceneManager(colmap_dir)  # 实例化一个SceneManager对象，管理COLMAP项目 colmap_dir 中的文件和数据
         manager.load_cameras()  # 读取内参 cameras.bin
-        manager.load_images()   # 读取外餐 images.bin
+        manager.load_images()   # 读取外参 images.bin
         manager.load_points3D() # 读取3D点云 points.bin
 
-        # 读取 所有相机的外参矩阵（转换成 W2C）
+        # 读取 所有图像的外参矩阵（转换成 W2C）
         imdata = manager.images
-        w2c_mats = []       # 所有相机的 W2C变换矩阵
-        camera_ids = []     # 所有相机的 相机ID
+        w2c_mats = []       # 所有图像的 W2C变换矩阵
+        camera_ids = []     # 所有图像的 相机ID
         Ks_dict = dict()    # 所有相机 经下采样倍率调整后的 内参矩阵
-        params_dict = dict()    # 所有相机的 畸变参数
+        params_dict = dict()    # 所有相机 的畸变参数
         imsize_dict = dict()    # 所有相机 经下采样倍率调整后的 宽高
-        mask_dict = dict()
+        mask_dict = dict()      # 所有相机 的mask，默认为None
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
-        # 遍历所有相机外参
+        # 遍历所有图像外参
         for k in imdata:
             im = imdata[k]
             rot = im.R()
@@ -71,11 +71,11 @@ class Parser:
             w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0) # W2C的变换矩阵 (4,4)
             w2c_mats.append(w2c)
 
-            # 支持多个相机内参
-            camera_id = im.camera_id    # 每个图像都有一个相机ID，可以是相同的相机
+            # 支持多个相机
+            camera_id = im.camera_id    # 当前图像的相机ID，每个图像都有一个相机ID，可以是相同的相机
             camera_ids.append(camera_id)
 
-            # 获取 当前相机内参
+            # 获取 当前图像对应相机的内参
             cam = manager.cameras[camera_id]
             fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
@@ -120,9 +120,9 @@ class Parser:
 
         w2c_mats = np.stack(w2c_mats, axis=0)   # (N,4,4)
 
-        camtoworlds = np.linalg.inv(w2c_mats)   # 所有相机的 C2W变换矩阵矩阵
+        camtoworlds = np.linalg.inv(w2c_mats)   # 所有图像的 C2W变换矩阵
 
-        # 获取所有相机的 图片名。不再需要根据图片名对位姿进行排序
+        # 获取所有图片名。不再需要根据图片名对位姿进行排序
         image_names = [imdata[k].name for k in imdata]
 
         # 之前的 NeRF 结果是按照文件名排序生成的，确保在相同的测试集上报告指标
@@ -154,18 +154,18 @@ class Parser:
             image_dir_suffix = f"_{factor}"
         else:
             image_dir_suffix = ""
-        colmap_image_dir = os.path.join(data_dir, "images")
-        image_dir = os.path.join(data_dir, "images" + image_dir_suffix) # 例：garden/images_2
+        colmap_image_dir = os.path.join(data_dir, "images")             # COLMAP使用的图像文件夹，例：garden/images
+        image_dir = os.path.join(data_dir, "images" + image_dir_suffix) # GS要使用的图像文件夹，例：garden/images_2
         # 检查图像文件夹是否存在
         for d in [image_dir, colmap_image_dir]:
             if not os.path.exists(d):
                 raise ValueError(f"Image folder {d} does not exist.")
 
-        # 获取图像路径。下采样后的图像可能与 COLMAP使用的图像 拥有不同的图像名，因此需要在两个文件排序列表之间映射
+        # 获取GS使用的图像路径
         colmap_files = sorted(_get_rel_paths(colmap_image_dir)) # garden/images下所有图像的 相对路径
         image_files = sorted(_get_rel_paths(image_dir))         # garden/images_2下所有图像的 相对路径
         colmap_to_image = dict(zip(colmap_files, image_files))
-        image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]    # 从COLMAP中获取的图像名，映射到下采样后的图像路径
+        image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]    # 重映射图像路径，garden/images_2/000000.jpg
 
         # 获取 3D点云 和 每个图像中与点云关联的3D点索引{image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
@@ -183,37 +183,37 @@ class Parser:
                 point_idx = manager.point3D_id_to_point3D_idx[point_id]     # 将3D点ID 映射到 点云中3D点的索引，用于直接访问点云数据
                 point_indices.setdefault(image_name, []).append(point_idx)  # 在point_indices中为每个图像名初始化一个空list，并添加该3D点索引
         point_indices = {
-            k: np.array(v).astype(np.int32) for k, v in point_indices.items()   # 将3D点索引列表 转换为 NumPy数组并指定数据类型为 int32，，提高存储效率和兼容性
+            k: np.array(v).astype(np.int32) for k, v in point_indices.items()   # 将3D点索引列表 转换为 NumPy数组并指定数据类型为 int32，提高存储效率和兼容性
         }
 
         # Normalize the world space.
         if normalize:
-            # 如果要进行归一化处理，
-            T1 = similarity_from_cameras(camtoworlds)   # 计算相机位姿的相似变换矩阵，用于将相机坐标系下的点云变换到归一化坐标系下
-            camtoworlds = transform_cameras(T1, camtoworlds)
-            points = transform_points(T1, points)
+            # 如果要进行归一化处理，先计算 所有相机坐标轴 与 世界坐标轴 对齐的变换矩阵，再计算点云对齐到其主轴（Z轴）的 变换矩阵，并应用于 所有相机位姿与点云
+            T1 = similarity_from_cameras(camtoworlds)   # 计算 所有图像的相机坐标轴 与 世界坐标轴 对齐的变换矩阵，(4,4)
+            camtoworlds = transform_cameras(T1, camtoworlds)    # 变换所有相机坐标轴
+            points = transform_points(T1, points)   # 变换所有3D点云
 
-            T2 = align_principle_axes(points)
+            T2 = align_principle_axes(points)   # 计算点云对齐到其主轴（Z轴）的 变换矩阵
             camtoworlds = transform_cameras(T2, camtoworlds)
             points = transform_points(T2, points)
 
-            transform = T2 @ T1
+            transform = T2 @ T1     # 最终的变换矩阵
         else:
             transform = np.eye(4)
 
-        self.image_names = image_names  # List[str], (num_images,)
-        self.image_paths = image_paths  # List[str], (num_images,)
-        self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
-        self.camera_ids = camera_ids  # List[int], (num_images,)
-        self.Ks_dict = Ks_dict  # Dict of camera_id -> K
-        self.params_dict = params_dict  # Dict of camera_id -> params
-        self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
-        self.mask_dict = mask_dict  # Dict of camera_id -> mask
-        self.points = points  # np.ndarray, (num_points, 3)
-        self.points_err = points_err  # np.ndarray, (num_points,)
-        self.points_rgb = points_rgb  # np.ndarray, (num_points, 3)
-        self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
-        self.transform = transform  # np.ndarray, (4, 4)
+        self.image_names = image_names  # 所有图像的 图片名，List[str], (num_images,)
+        self.image_paths = image_paths  # GS要使用的所有图像的 相对路径，例garden/images_2/000000.jpg，List[str], (num_images,)
+        self.camtoworlds = camtoworlds  # 变换后的 所有图像的 C2W位姿，np.ndarray, (num_images, 4, 4)
+        self.camera_ids = camera_ids    # 所有相机ID，多个图像可以是同一个相机ID，即来自于相同的相机，List[int], (num_images,)
+        self.Ks_dict = Ks_dict      # 所有相机 经下采样倍率调整后的 内参矩阵，Dict of camera_id -> K
+        self.params_dict = params_dict  # 所有相机的 畸变参数，Dict of camera_id -> params
+        self.imsize_dict = imsize_dict  # 所有相机 经下采样倍率调整后的 宽高，Dict of camera_id -> (width, height)
+        self.mask_dict = mask_dict  # 所有相机的 mask，默认为None，Dict of camera_id -> mask
+        self.points = points    # 变换后的 所有点云，np.ndarray, (num_points, 3)
+        self.points_err = points_err  # 所有点云的 重投影误差，np.ndarray, (num_points,)
+        self.points_rgb = points_rgb  # 所有点云的 颜色，np.ndarray, (num_points, 3)
+        self.point_indices = point_indices  # 所有图像 与其 对应的所有3D点的索引，Dict[str, np.ndarray], image_name -> [M,]
+        self.transform = transform    # 变换矩阵，np.ndarray, (4, 4)
 
         # load one image to check the size. In the case of tanksandtemples dataset, the
         # intrinsics stored in COLMAP corresponds to 2x upsampled images.
