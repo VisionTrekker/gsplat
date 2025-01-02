@@ -245,18 +245,18 @@ def slice(bil_grids, xy, rgb, grid_idx):
 
 
 class BilateralGrid(nn.Module):
-    """Class for 3D bilateral grids.
-
-    Holds one or more than one bilateral grids.
+    """
+    三维双边网格模型（用于图像和图形处理的三维数据结构，可以存储颜色和空间信息），可用于图像的重采样和过滤
+        包含一个或多个双边网格
     """
 
     def __init__(self, num, grid_X=16, grid_Y=16, grid_W=8):
         """
         Args:
-            num (int): The number of bilateral grids (i.e., the number of views).
-            grid_X (int): Defines grid width $W$.
-            grid_Y (int): Defines grid height $H$.
-            grid_W (int): Defines grid guidance dimension $L$.
+            num (int): 双边网格的数量（训练相机的数量）
+            grid_X (int): 网格宽度 W，默认为16
+            grid_Y (int): 网格高度 H，默认为16
+            grid_W (int): 网格引导的维度 L，默认为8
         """
         super(BilateralGrid, self).__init__()
 
@@ -267,13 +267,14 @@ class BilateralGrid(nn.Module):
         self.grid_guidance = grid_W
         """Grid guidance dimension. Type: int."""
 
-        # Initialize grids.
+        # 初始化一个网格（单位矩阵）
         grid = self._init_identity_grid()
-        self.grids = nn.Parameter(grid.tile(num, 1, 1, 1, 1))  # (N, 12, L, H, W)
+        self.grids = nn.Parameter(grid.tile(num, 1, 1, 1, 1))  # 扩展为 (N, 12, L, H, W)，并注册为 模型的参数
         """ A 5-D tensor of shape $(N, 12, L, H, W)$."""
 
-        # Weights of BT601 RGB-to-gray.
+        # 注册一个缓冲区（buffer），用于存储 RGB 到灰度的权重。这些权重是 BT601 标准中定义的 RGB 到灰度的转换系数
         self.register_buffer("rgb2gray_weight", torch.Tensor([[0.299, 0.587, 0.114]]))
+        # 将 RGB 颜色转换为灰度值，并将其范围映射到 [-1, 1]
         self.rgb2gray = lambda rgb: (rgb @ self.rgb2gray_weight.T) * 2.0 - 1.0
         """ A function that converts RGB to gray-scale guidance in $[-1, 1]$."""
 

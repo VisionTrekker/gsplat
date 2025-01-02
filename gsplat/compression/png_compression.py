@@ -14,31 +14,33 @@ from gsplat.utils import inverse_log_transform, log_transform
 
 @dataclass
 class PngCompression:
-    """Uses quantization and sorting to compress splats into PNG files and uses
-    K-means clustering to compress the spherical harmonic coefficents.
+    """
+    功能：
+        1. 使用量化和排序将 splats 压缩成 PNG 文件；
+        2. 使用 K-means 聚类压缩SH系数
 
-    .. warning::
+    依赖项：需安装 imageio、plas 和 torchpq 包
         This class requires the `imageio <https://pypi.org/project/imageio/>`_,
         `plas <https://github.com/fraunhoferhhi/PLAS.git>`_
         and `torchpq <https://github.com/DeMoriarty/TorchPQ?tab=readme-ov-file#install>`_ packages to be installed.
 
     .. warning::
-        This class might throw away a few lowest opacities splats if the number of
-        splats is not a square number.
+        如果 splats 的数量不是平方数，这个PngCompression类可能会丢弃一些最低不透明度的 splats
+        This class might throw away a few lowest opacities splats if the number of splats is not a square number.
 
     .. note::
-        The splats parameters are expected to be pre-activation values. It expects
-        the following fields in the splats dictionary: "means", "scales", "quats",
-        "opacities", "sh0", "shN". More fields can be added to the dictionary, but
-        they will only be compressed using NPZ compression.
+        splats 参数应该是预激活值。splats 参数字典应包含以下字段："means", "scales", "quats", "opacities", "sh0", "shN"
+        可以向字典中添加更多字段，但它们将仅使用 NPZ 压缩
+        The splats parameters are expected to be pre-activation values. It expects the following fields in the splats dictionary: "means", "scales", "quats",
+        "opacities", "sh0", "shN". More fields can be added to the dictionary, but they will only be compressed using NPZ compression.
 
     References:
         - `Compact 3D Scene Representation via Self-Organizing Gaussian Grids <https://arxiv.org/abs/2312.13299>`_
         - `Making Gaussian Splats more smaller <https://aras-p.info/blog/2023/09/27/Making-Gaussian-Splats-more-smaller/>`_
 
     Args:
-        use_sort (bool, optional): Whether to sort splats before compression. Defaults to True.
-        verbose (bool, optional): Whether to print verbose information. Default to True.
+        - use_sort (bool, optional): 是否在压缩前对 splats 进行排序，默认为 True
+        - verbose (bool, optional):  是否打印详细信息，默认为 True
     """
 
     use_sort: bool = True

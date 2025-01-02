@@ -64,7 +64,7 @@ class Config:
 
     patch_size: Optional[int] = None    # 随机裁剪的尺寸 (experimental)
 
-    global_scale: float = 1.0           # 相对于场景尺寸的 全局调节因子
+    global_scale: float = 1.0           # 场景尺寸的 相对调节因子
 
     normalize_world_space: bool = True  # Normalize the world space
 
@@ -72,7 +72,7 @@ class Config:
 
     port: int = 8080    # Viewer的端口号
 
-    batch_size: int = 1     # 训练时的 batch size，学习率会根据其值自动调整
+    batch_size: int = 1     # 训练时每个进程的 batch size，学习率会根据其值自动调整
 
     steps_scaler: float = 1.0   # 调整迭代次数的 全局因子（倍数）
 
@@ -80,15 +80,15 @@ class Config:
     eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
 
-    init_type: str = "sfm"      # 初始化方法名称
-    init_num_pts: int = 100_000     # 初始高斯个数（如果使用 SfM，则无效）
-    init_extent: float = 3.0    # 初始高斯的范围 是相机范围的倍数（如果使用 SfM，则无效）
+    init_type: str = "sfm"      # 初始化高斯模型的方，sfm 或 random
+    init_num_pts: int = 100_000     # 初始高斯个数（随机初始化时有效）
+    init_extent: float = 3.0        # 初始高斯的范围倍数（*场景大小，随机初始化时有效）
 
     sh_degree: int = 3
     sh_degree_interval: int = 1000
 
     init_opa: float = 0.1       # 初始高斯的 不透明度
-    init_scale: float = 1.0     # 初始高斯的 轴长
+    init_scale: float = 1.0     # 初始高斯的 轴长倍数（*3最近邻平均距离）
 
     ssim_lambda: float = 0.2    # loss中 SSIM的权重
 
@@ -102,9 +102,8 @@ class Config:
 
     packed: bool = False    # 是否在光栅器中使用 “packed 模式”（会降低显存使用量，但是会慢一点。但多卡时因减少GPU之间的数据传输，会加快训练速度）
 
-    sparse_grad: bool = False   # 是否在优化中使用 “sparse gradients” (experimental)
-
-    visible_adam: bool = False  # 是否使用 Taming-3DGS 的 “Visible Adam” (experimental)
+    sparse_grad: bool = False   # 是否使用 “SparseAdam” 优化器 (experimental)
+    visible_adam: bool = False  # 是否使用Taming-3DGS的 “SelectiveAdam” 优化器 (experimental)
 
     antialiased: bool = False   # 是否在光栅器中使用 “Anti-aliasing”（轻微降低评测指标）
 
@@ -113,20 +112,20 @@ class Config:
     opacity_reg: float = 0.0    # 不透明度 损失权重
     scale_reg: float = 0.0      # 轴长 损失权重
 
-    pose_opt: bool = False      # 是否开启 相机优化
-    pose_opt_lr: float = 1e-5   # 相机优化的 学习率
-    pose_opt_reg: float = 1e-6  # 相机优化正则化的 权重衰减
-    pose_noise: float = 0.0     # 是否在相机外参中添加噪声（仅用于测试相机位姿优化）
+    pose_opt: bool = False      # 是否在训练中优化 训练相机的位姿
+    pose_opt_lr: float = 1e-5   # 相机位姿优化的 学习率
+    pose_opt_reg: float = 1e-6  # 相机位姿优化正则化的 权重衰减
+    pose_noise: float = 0.0     # 是否在相机位姿优化中添加噪声扰动，以该噪声为方差随机初始化Embedding层的权重（仅用于测试 相机位姿优化功能？）
 
     app_opt: bool = False       # 是否开启光照一致性优化 (experimental)
     app_embed_dim: int = 16     # 光照一致性优化的 “embedding” 维度
     app_opt_lr: float = 1e-3    # 光照一致性优化的 学习率
     app_opt_reg: float = 1e-6   # 光照一致性优化正则化的 权重衰减
 
-    use_bilateral_grid: bool = False    # 是否开启 “bilateral grid” (experimental)
-    bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)    # “bilateral grid”的维度 (X, Y, W)
+    use_bilateral_grid: bool = False    # 是否开启 双边网格优化 “bilateral grid” (experimental)
+    bilateral_grid_shape: Tuple[int, int, int] = (16, 16, 8)    # 双边网格的维度 (X, Y, W)
 
-    depth_loss: bool = False    # 是否使用深度loss (experimental)
+    depth_loss: bool = False    # 是否使用深度loss (需加载深度图，experimental)
     depth_lambda: float = 1e-2  # 深度loss的 权重
 
     tb_every: int = 100     # 每...步将信息写入 tensorboard
@@ -156,79 +155,88 @@ class Config:
 
 
 def create_splats_with_optimizers(
-    parser: Parser,
-    init_type: str = "sfm",
-    init_num_pts: int = 100_000,
-    init_extent: float = 3.0,
-    init_opacity: float = 0.1,
-    init_scale: float = 1.0,
-    scene_scale: float = 1.0,
+    parser: Parser,             # COLMAP Parser
+    init_type: str = "sfm",     # 初始化高斯模型时的方法类型，sfm 或 random
+    init_num_pts: int = 100_000,    # 初始高斯个数（随机初始化时有效）
+    init_extent: float = 3.0,       # 初始高斯的范围倍数（*场景大小，随机初始化时有效）
+    init_opacity: float = 0.1,  # 初始高斯的 不透明度
+    init_scale: float = 1.0,    # 初始高斯的 轴长倍数
+    scene_scale: float = 1.0,   # 场景大小（相机范围半径 * 1.1 * global_scale）
     sh_degree: int = 3,
-    sparse_grad: bool = False,
-    visible_adam: bool = False,
-    batch_size: int = 1,
-    feature_dim: Optional[int] = None,
-    device: str = "cuda",
-    world_rank: int = 0,
-    world_size: int = 1,
+    sparse_grad: bool = False,  # 是否使用 “SparseAdam” 优化器
+    visible_adam: bool = False, # 是否使用Taming-3DGS的 “SelectiveAdam” 优化器
+    batch_size: int = 1,    # 每个进程的 batch size，学习率会根据其值自动调整
+    feature_dim: Optional[int] = None,  # 若开启光照一致性优化，则额外增加 32个特征维度，否则为None
+    device: str = "cuda",   # 指定cuda的编号
+    world_rank: int = 0,    # 当前进程的 全局编号（用于分布式训练）
+    world_size: int = 1,    # 总进程数
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
-    if init_type == "sfm":
-        points = torch.from_numpy(parser.points).float()
-        rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
-    elif init_type == "random":
+
+    # 1. 获取初始高斯的 位置、颜色
+    if init_type == "sfm":  # 使用 SfM结果 初始化高斯模型
+        points = torch.from_numpy(parser.points).float()    # 所有3D点的世界坐标
+        rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()  # 所有3D点的RGB颜色（归一化到 [0,1]）
+    elif init_type == "random": # 随机初始化高斯模型，则在 [-init_extent*scene_scale, init_extent*scene_scale] 范围内随机生成 init_num_pts 个点
         points = init_extent * scene_scale * (torch.rand((init_num_pts, 3)) * 2 - 1)
         rgbs = torch.rand((init_num_pts, 3))
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
 
-    # Initialize the GS size to be the average dist of the 3 nearest neighbors
-    dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+    # 2. 初始高斯的 轴长（N,3） = 所有点到其3最近邻的 平均距离 * 倍数因子（默认为1.0）
+    dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # 到3个最近邻距离平方的均值，[N,]
     dist_avg = torch.sqrt(dist2_avg)
     scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
 
-    # Distribute the GSs to different ranks (also works for single rank)
-    points = points[world_rank::world_size]
+    # 3. 将 位置、颜色、轴长 按照进程编号进行 分割，确保每个进程只处理自己的数据（用于Grendel的分布式训练，在单进程模式也起作用）
+    points = points[world_rank::world_size]     # 例：world_size=4，world_rank=0处理 0,4,8个高斯，world_rank=1处理 1,5,9个高斯
     rgbs = rgbs[world_rank::world_size]
     scales = scales[world_rank::world_size]
 
     N = points.shape[0]
-    quats = torch.rand((N, 4))  # [N, 4]
-    opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
+    # 4. 随机生成 初始高斯的 旋转四元数，[N, 4]
+    quats = torch.rand((N, 4))
+    # 5. 初始高斯的 不透明度 = 0.1（逆对数），[N,]
+    opacities = torch.logit(torch.full((N,), init_opacity))
 
+    # 6. 添加（位置、轴长、旋转四元数、不透明度）优化参数，并设定 学习率
     params = [
         # name, value, lr
-        ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),
+        ("means", torch.nn.Parameter(points), 1.6e-4 * scene_scale),    # lr = 场景大小 * 1.6e-4
         ("scales", torch.nn.Parameter(scales), 5e-3),
         ("quats", torch.nn.Parameter(quats), 1e-3),
         ("opacities", torch.nn.Parameter(opacities), 5e-2),
     ]
 
-    if feature_dim is None:
+    # 7. 添加（颜色）优化参数
+    if feature_dim is None: # 不开启光照一致性优化，则使用SH系数
         # color is SH coefficients.
         colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
         colors[:, 0, :] = rgb_to_sh(rgbs)
         params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), 2.5e-3))
         params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), 2.5e-3 / 20))
-    else:
+    else:   # 开启，则使用特征向量和点云颜色
         # features will be used for appearance and view-dependent shading
         features = torch.rand(N, feature_dim)  # [N, feature_dim]
         params.append(("features", torch.nn.Parameter(features), 2.5e-3))
         colors = torch.logit(rgbs)  # [N, 3]
         params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
 
-    splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
+    splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)    # 将优化参数转换成 torch.nn.Parameter 对象，并移动到指定的cuda上
+
     # Scale learning rate based on batch size, reference:
     # https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/
     # Note that this would not make the training exactly equivalent, see
     # https://arxiv.org/pdf/2402.18824v1
-    BS = batch_size * world_size
+    BS = batch_size * world_size    # 总batch大小 = 每个进程的batch大小 * 总进程数
     optimizer_class = None
-    if sparse_grad:
+    if sparse_grad:     # 使用 “SparseAdam” 优化器
         optimizer_class = torch.optim.SparseAdam
-    elif visible_adam:
+    elif visible_adam:  # 使用Taming-3DGS的 “SelectiveAdam” 优化器
         optimizer_class = SelectiveAdam
-    else:
+    else:               # 默认使用标准的 Adam 优化器
         optimizer_class = torch.optim.Adam
+
+    # 8. 为每个参数创建一个优化器实例 {"means": torch.optim.Adam(), "scales": torch.optim.Adam(), ...}，并根据 BS 调整学习率、eps、betas
     optimizers = {
         name: optimizer_class(
             [{"params": splats[name], "lr": lr * math.sqrt(BS), "name": name}],
@@ -238,15 +246,27 @@ def create_splats_with_optimizers(
         )
         for name, _, lr in params
     }
-    return splats, optimizers
+    return splats, optimizers   # 返回高斯模型的 优化参数字典 和 对应的优化器字典
 
 
 class Runner:
-    """Engine for training and testing."""
+    """训练和测试的 Runner"""
 
     def __init__(
         self, local_rank: int, world_rank, world_size: int, cfg: Config
     ) -> None:
+        """
+        1. 加载数据：创建 COLMAP Parser，训练Dataset，测试Dataset，调整场景大小
+        2. 创建初始高斯模型，返回该模型的 优化参数字典 和 对应的优化器字典
+        3. 检查参数和优化器是否正确配置
+        4. 初始化并返回当前训练策略数据的 state
+        5. 创建 高斯模型压缩策略 （可选）
+        6. 创建 优化训练相机位姿的 优化器 （可选）
+        7. 创建 优化光照一致性的 优化器 （可选）
+        8. 创建 优化双边网格的 优化器 （可选）
+        9. 创建 SSIM损失 和 PSNR、LPIPS评测对象
+        10. 创建 查看器
+        """
         set_random_seed(42 + local_rank)
 
         self.cfg = cfg  # Config对象，包含所有配置参数
@@ -259,35 +279,42 @@ class Runner:
         os.makedirs(cfg.result_dir, exist_ok=True)
 
         # Setup output directories.
-        self.ckpt_dir = f"{cfg.result_dir}/ckpts"
+        self.ckpt_dir = f"{cfg.result_dir}/ckpts"   # 模型参数 保存文件夹
         os.makedirs(self.ckpt_dir, exist_ok=True)
-        self.stats_dir = f"{cfg.result_dir}/stats"
+        self.stats_dir = f"{cfg.result_dir}/stats"  # 训练（mem、ellipse_time、num_GS）和评测（PNSR、SSIM、LPIPS、ellipse_time、num_GS）结果 保存文件夹
         os.makedirs(self.stats_dir, exist_ok=True)
-        self.render_dir = f"{cfg.result_dir}/renders"
+        self.render_dir = f"{cfg.result_dir}/renders"   # 在测试迭代次数下 测试集渲染图像 保存文件夹
         os.makedirs(self.render_dir, exist_ok=True)
 
         # Tensorboard
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
 
-        # Load data: Training data should contain initial points and colors.
+        # 1. 加载数据
+        # 1.1 创建 COLMAP Parser
+        #   所有COLMAP图像的 图像名、C2W变换矩阵、相机ID，所有GS图像；    所有COLMAP相机的 内参矩阵、畸变参数、图像宽、高、mask；
+        #   所有3D点的 世界坐标、RGB颜色、重投影误差；                  所有COLMAP图像名 -> 观测到的所有3D点在点云中的索引；
+        #   场景变换矩阵；     去畸变信息；      场景大小
         self.parser = Parser(
             data_dir=cfg.data_dir,
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
         )
+        # 1.2 创建 训练Dataset
         self.trainset = Dataset(
             self.parser,
             split="train",
             patch_size=cfg.patch_size,
             load_depths=cfg.depth_loss,
         )
+        # 1.3 创建 测试Dataset
         self.valset = Dataset(self.parser, split="val")
+        # 1.4 调整场景大小（相机范围半径 * 1.1 * global_scale）
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
-        # 创建初始GS模型
-        feature_dim = 32 if cfg.app_opt else None
+        # 2. 创建初始高斯模型，返回该模型的 优化参数字典 和 对应的优化器字典
+        feature_dim = 32 if cfg.app_opt else None   # 若开启光照一致性优化，则额外增加 32个特征维度
         self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
             init_type=cfg.init_type,
@@ -307,30 +334,33 @@ class Runner:
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
 
-        # Densification Strategy
+        # 3. 检查参数和优化器是否正确配置：优化器中的参数 必须和 高斯模型的需计算梯度的参数一一对应，每个参数对应的优化器有且只有一个 param_group，不同的策略必须包含哪些参数
         self.cfg.strategy.check_sanity(self.splats, self.optimizers)
 
-        if isinstance(self.cfg.strategy, DefaultStrategy):
+        # 4. 初始化并返回当前训练策略数据的 state
+        if isinstance(self.cfg.strategy, DefaultStrategy):  # 默认策略
             self.strategy_state = self.cfg.strategy.initialize_state(
                 scene_scale=self.scene_scale
             )
-        elif isinstance(self.cfg.strategy, MCMCStrategy):
+        elif isinstance(self.cfg.strategy, MCMCStrategy):   # MCMC策略
             self.strategy_state = self.cfg.strategy.initialize_state()
         else:
             assert_never(self.cfg.strategy)
 
-        # Compression Strategy
+        # 5. 创建 高斯模型压缩策略
         self.compression_method = None
         if cfg.compression is not None:
-            if cfg.compression == "png":
+            if cfg.compression == "png":    # PNG压缩策略，则使用量化和排序将 splats 压缩成PNG文件；使用 K-means 聚类压缩SH系数
                 self.compression_method = PngCompression()
             else:
                 raise ValueError(f"Unknown compression strategy: {cfg.compression}")
 
+        # 6. 创建 优化训练相机位姿的 优化器
         self.pose_optimizers = []
         if cfg.pose_opt:
-            self.pose_adjust = CameraOptModule(len(self.trainset)).to(self.device)
-            self.pose_adjust.zero_init()
+            self.pose_adjust = CameraOptModule(len(self.trainset)).to(self.device)  # 创建 相机位姿优化模型，包含一个Embedding层，每个训练相机的嵌入向量维度为9（3平移 + 6旋转）
+            self.pose_adjust.zero_init()    # Embedding层的权重初始化为0
+
             self.pose_optimizers = [
                 torch.optim.Adam(
                     self.pose_adjust.parameters(),
@@ -338,25 +368,24 @@ class Runner:
                     weight_decay=cfg.pose_opt_reg,
                 )
             ]
-            if world_size > 1:
+            if world_size > 1:  # 总进程数 > 1，则使用 DDP 分布式并行训练
                 self.pose_adjust = DDP(self.pose_adjust)
 
-        if cfg.pose_noise > 0.0:
+        if cfg.pose_noise > 0.0:    # 位姿优化噪声 > 0，创建相机位姿优化扰动模型，以该噪声为方差随机初始化Embedding层的权重
             self.pose_perturb = CameraOptModule(len(self.trainset)).to(self.device)
             self.pose_perturb.random_init(cfg.pose_noise)
             if world_size > 1:
                 self.pose_perturb = DDP(self.pose_perturb)
 
+        # 7. 创建 优化光照一致性的 优化器
         self.app_optimizers = []
         if cfg.app_opt:
-            # 使用外观一致性补偿模块
             assert feature_dim is not None
-            self.app_module = AppearanceOptModule(
-                len(self.trainset), feature_dim, cfg.app_embed_dim, cfg.sh_degree
-            ).to(self.device)
-            # initialize the last layer to be zero so that the initial output is zero.
-            torch.nn.init.zeros_(self.app_module.color_head[-1].weight)
+            # 创建 光照一致性优化模型，包含一个Embedding层和一个MLP层
+            self.app_module = AppearanceOptModule(len(self.trainset), feature_dim, cfg.app_embed_dim, cfg.sh_degree).to(self.device)
+            torch.nn.init.zeros_(self.app_module.color_head[-1].weight) # 将MLP最后一层的权重和偏置初始化为0，以确保初始输出为0
             torch.nn.init.zeros_(self.app_module.color_head[-1].bias)
+            # 为2个层分别创建一个优化器
             self.app_optimizers = [
                 torch.optim.Adam(
                     self.app_module.embeds.parameters(),
@@ -371,14 +400,17 @@ class Runner:
             if world_size > 1:
                 self.app_module = DDP(self.app_module)
 
+        # 8. 创建 优化双边网格的 优化器
         self.bil_grid_optimizers = []
         if cfg.use_bilateral_grid:
+            # 创建 三维双边网格模型，可用于图像的重采样和过滤
             self.bil_grids = BilateralGrid(
                 len(self.trainset),
                 grid_X=cfg.bilateral_grid_shape[0],
                 grid_Y=cfg.bilateral_grid_shape[1],
                 grid_W=cfg.bilateral_grid_shape[2],
             ).to(self.device)
+
             self.bil_grid_optimizers = [
                 torch.optim.Adam(
                     self.bil_grids.parameters(),
@@ -387,7 +419,7 @@ class Runner:
                 ),
             ]
 
-        # Losses & Metrics.
+        # 9. 创建 SSIM损失 和 PSNR、LPIPS评测对象
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.psnr = PeakSignalNoiseRatio(data_range=1.0).to(self.device)
 
@@ -403,7 +435,7 @@ class Runner:
         else:
             raise ValueError(f"Unknown LPIPS network: {cfg.lpips_net}")
 
-        # Viewer
+        # 10. 创建 查看器
         if not self.cfg.disable_viewer:
             self.server = viser.ViserServer(port=cfg.port, verbose=False)
             self.viewer = nerfview.Viewer(
@@ -470,21 +502,22 @@ class Runner:
         return render_colors, render_alphas, info
 
     def train(self):
+        """训练"""
         cfg = self.cfg
         device = self.device
-        world_rank = self.world_rank
-        world_size = self.world_size
+        world_rank = self.world_rank    # 当前进程的 全局编号
+        world_size = self.world_size    # 总进程数
 
-        # Dump cfg.
+        # 在主进程输出 配置参数
         if world_rank == 0:
             with open(f"{cfg.result_dir}/cfg.yml", "w") as f:
                 yaml.dump(vars(cfg), f)
 
-        max_steps = cfg.max_steps
+        max_steps = cfg.max_steps   # 总迭代次数
         init_step = 0
 
+        # 创建高斯位置lr的调度器，最终值为 初值的0.01
         schedulers = [
-            # means has a learning rate schedule, that end at 0.01 of the initial value
             torch.optim.lr_scheduler.ExponentialLR(
                 self.optimizers["means"], gamma=0.01 ** (1.0 / max_steps)
             ),
@@ -680,7 +713,7 @@ class Runner:
                     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
 
-            # save checkpoint before updating the model
+            # 到达save_steps，保存 checkpoint
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 stats = {
@@ -775,14 +808,14 @@ class Runner:
             else:
                 assert_never(self.cfg.strategy)
 
-            # eval the full set
+            # 到达eval_steps，渲染测试视角图像、生成渲染轨迹视频、保存模型
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
                 self.render_traj(step)
 
                 self.save_ply(os.path.join(cfg.result_dir, "point_cloud/iteration_{}.ply".format(step)))
 
-            # run compression
+            # 到达eval_steps 且 要压缩模型，则执行压缩
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
                 self.run_compression(step=step)
 
@@ -1041,7 +1074,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if world_rank == 0: # 在主进程中打印提示信息
             print("Viewer is disabled in distributed training.")
 
-    # 1. 创建 Runner 实例
+    # 1. 创建 Runner 实例，用于训练和测试
     runner = Runner(local_rank, world_rank, world_size, cfg)
 
     if cfg.ckpt is not None:

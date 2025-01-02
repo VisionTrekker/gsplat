@@ -224,9 +224,10 @@ def generate_interpolated_path(
     """
 
     def poses_to_points(poses, dist):
-        """Converts from pose matrices to (position, lookat, up) format."""
-        pos = poses[:, :3, -1]
-        lookat = poses[:, :3, -1] - dist * poses[:, :3, 2]
+        """将 相机外参矩阵 转换为（Position、lookat、up-point）"""
+        # TODO 未完成转换推导
+        pos = poses[:, :3, -1]      # 位置 t
+        lookat = poses[:, :3, -1] - dist * poses[:, :3, 2]  # t -
         up = poses[:, :3, -1] + dist * poses[:, :3, 1]
         return np.stack([pos, lookat, up], 1)
 
