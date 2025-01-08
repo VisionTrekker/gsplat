@@ -26,28 +26,6 @@ class DefaultStrategy(Strategy):
 
     `AbsGS: Recovering Fine Details for 3D Gaussian Splatting <https://arxiv.org/abs/2404.10484>`_
 
-    Which typically leads to better results but requires to set the `grow_grad2d` to a
-    higher value, e.g., 0.0008. Also, the :func:`rasterization` function should be called
-    with `absgrad=True` as well so that the absolute gradients are computed.
-
-    Args:
-        prune_opa (float):          剪枝中的 不透明度阈值，< 该值，则高斯被剪枝。默认为 0.005
-        grow_grad2d (float):    增稠中 高斯中心2D投影位置梯度阈值，> 该值，则被克隆或分裂。默认为 0.0002
-        grow_scale3d (float):   增稠中 高斯3D轴长阈值，< 该值*场景尺寸，则被复制；> 该值*场景尺寸，则被分裂。默认为 0.01
-        grow_scale2d (float):   增稠中 高斯2D轴长阈值，> 该值*图像分辨率，则被分裂。默认为 0.05
-        prune_scale3d (float):      剪枝中的 高斯3D轴长阈值，> 该值*场景尺寸，则被剪枝。默认为 0.1
-        prune_scale2d (float):      剪枝中的 高斯2D轴长阈值，> 该值*图像分辨率，则被剪枝。默认为 0.15
-        refine_scale2d_stop_iter (int): 基于高斯2D轴长细化高斯的 终止迭代次数。默认为 0
-        refine_start_iter (int):        细化高斯的 开始迭代次数。默认为 500
-        refine_stop_iter (int):         细化高斯的 终止迭代次数。默认为 15_000
-        reset_every (int):      重置不透明度的迭代间隔。默认为 3000
-        refine_every (int):     增稠的迭代间隔。默认为 100
-        pause_refine_after_reset (int): 重置后的暂停增稠高斯的迭代次数。默认为 0，不暂停；有的方法将该值设为 训练集中图像个数
-        absgrad (bool):         在分裂高斯时 是否使用 绝对梯度。默认为 False
-        revised_opacity (bool): 是否使用 arXiv:2404.06109 论文中提出的 修正不透明度。默认为 False
-        verbose (bool):         是否打印详细信息。默认为 False
-        key_for_gradient (str):  使用的增稠方案。3DGS使用 "means2d"梯度、2DGS使用类似的梯度 "gradient_2dgs"
-
     Examples:
 
         >>> from gsplat import DefaultStrategy, rasterization
@@ -65,88 +43,86 @@ class DefaultStrategy(Strategy):
 
     """
 
-    prune_opa: float = 0.005
-    grow_grad2d: float = 0.0002
-    grow_scale3d: float = 0.01
-    grow_scale2d: float = 0.05
-    prune_scale3d: float = 0.1
-    prune_scale2d: float = 0.15
-    refine_scale2d_stop_iter: int = 0
-    refine_start_iter: int = 500
-    refine_stop_iter: int = 15_000
-    reset_every: int = 3000
-    refine_every: int = 100
-    pause_refine_after_reset: int = 0
-    absgrad: bool = False
-    revised_opacity: bool = False
-    verbose: bool = False
-    key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
+    prune_opa: float = 0.005        # 剪枝中的 不透明度阈值，< 该值，则高斯被剪枝。默认为 0.005
+    grow_grad2d: float = 0.0002     # 增稠中 高斯中心2D投影位置梯度阈值，> 该值，则被克隆或分裂。默认为 0.0002
+    grow_scale3d: float = 0.01      # 增稠中 高斯3D轴长阈值，< 该值*场景尺寸，则被复制；> 该值*场景尺寸，则被分裂。默认为 0.01
+    grow_scale2d: float = 0.05      # 增稠中 高斯2D轴长阈值，> 该值*图像分辨率，则被分裂。默认为 0.05
+    prune_scale3d: float = 0.1      # 剪枝中的 高斯3D轴长阈值，> 该值*场景尺寸，则被剪枝。默认为 0.1
+    prune_scale2d: float = 0.15     # 剪枝中的 高斯2D轴长阈值，> 该值*图像分辨率，则被剪枝。默认为 0.15
+    refine_scale2d_stop_iter: int = 0   # 基于高斯2D轴长 增稠的 终止迭代次数。默认为 0
+    refine_start_iter: int = 500    # 增稠的 开始迭代次数。默认为 500
+    refine_stop_iter: int = 15_000  # 增稠的 终止迭代次数。默认为 15_000
+    reset_every: int = 3000         # 重置不透明度的 迭代间隔。默认为 3000
+    refine_every: int = 100         # 增稠的 迭代间隔。默认为 100
+    pause_refine_after_reset: int = 0   # 重置不透明度后的 暂停增稠的迭代次数。默认为 0，不暂停；有的方法将该值设为 训练集中图像个数
+    absgrad: bool = False           # 在分裂高斯时 是否使用 绝对梯度。默认为 False（通常效果会变好，但是需要将 grow_grad2d 升高，例如 0.0008。同时在调用 rasterization时需将 absgrad也设为True）
+    revised_opacity: bool = False   # 是否使用 arXiv:2404.06109 论文中提出的 修正复制后的高斯的不透明度（修改为 1 - sqrt(1 - a)）。默认为 False
+    verbose: bool = False           # 是否打印详细信息。默认为 False
+    key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"   # 使用的增稠方案。3DGS使用 "means2d"梯度、2DGS使用类似的梯度 "gradient_2dgs"
 
     def initialize_state(self, scene_scale: float = 1.0) -> Dict[str, Any]:
-        """Initialize and return the running state for this strategy.
-
-        The returned state should be passed to the `step_pre_backward()` and
-        `step_post_backward()` functions.
         """
-        # Postpone the initialization of the state to the first step so that we can
-        # put them on the correct device.
-        # - grad2d: running accum of the norm of the image plane gradients for each GS.
-        # - count: running accum of how many time each GS is visible.
-        # - radii: the radii of the GSs (normalized by the image resolution).
+        初始化并返回当前训练策略数据的 state ，返回的 state 被传递给 `step_pre_backward()` 和 `step_post_backward()`
+
+        将 state 的初始化推迟到训练的第一步，以确保可以将它们放到正确的设备上
+            - grad2d: 每个高斯在图像平面上的 梯度的范数的 累加值
+            - count: 每个高斯被训练相机看见的 累加次数
+            - radii: 每个高斯的半径（归一化到图像分辨率）
+        """
         state = {"grad2d": None, "count": None, "scene_scale": scene_scale}
-        if self.refine_scale2d_stop_iter > 0:
+        if self.refine_scale2d_stop_iter > 0:   # 如果需要基于高斯2D轴长 增稠，则在 state 中添加 radii
             state["radii"] = None
+
         return state
 
     def check_sanity(
         self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],   # 高斯模型的 优化参数字典
+        optimizers: Dict[str, torch.optim.Optimizer],   # 高斯模型的 优化器字典
     ):
-        """健全性（Sanity）检查，检查参数和优化器是否正确配置
+        """参数和优化器的 健全性检查
 
         Check if:
-            * `params`和`optimizers` 有相同的 keys.
-            * 每个优化器有且只有 param_group，与每个参数一一对应
-            * 存在以下 keys: {"means", "scales", "quats", "opacities"}.
-
+            * `params`和`optimizers`有相同的 keys，即优化器中的参数 必须和 高斯模型的需计算梯度的参数 一一对应
+            * 每个参数对应的优化器有且只有一个 param_group
+            * 必须存在以下 keys: {"means", "scales", "quats", "opacities"}.
         Raises:
             AssertionError: If any of the above conditions is not met.
-
-        .. note::
-            这个检查功能不是必须得，但强烈建议在初始化 strategy 后，调用该函数以确保参数和优化器配置正确
+        Note:
+            这个检查功能不是必须的，但强烈建议在初始化 strategy 后，调用该函数以确保参数和优化器配置正确
         """
-
+        # 1. 优化器中的参数 必须和 高斯模型的需计算梯度的参数 一一对应
+        # 2. 每个参数的对应的优化器有且只有一个参数组 param_groups
         super().check_sanity(params, optimizers)
-        # The following keys are required for this strategy.
+        # 3. 当前增稠策略必须包含 哪些 keys
         for key in ["means", "scales", "quats", "opacities"]:
             assert key in params, f"{key} is required in params but missing."
 
     def step_pre_backward(
         self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int,
-        info: Dict[str, Any],
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],   # 高斯模型参数
+        optimizers: Dict[str, torch.optim.Optimizer],   # 其优化器
+        state: Dict[str, Any],  # 训练策略数据的 state
+        step: int,  # 当前训练的迭代次数
+        info: Dict[str, Any],   # 前向传播过程中存储的 数据
     ):
-        """Callback function to be executed before the `loss.backward()` call."""
-        assert (
-            self.key_for_gradient in info
-        ), "The 2D means of the Gaussians is required but missing."
-        info[self.key_for_gradient].retain_grad()
+        """回调函数，在`loss.backward()`前执行"""
+        # 确保info中包含 高斯的2D中心的梯度
+        assert (self.key_for_gradient in info), "The 2D means of the Gaussians is required but missing."
+        # 保留该参数（非叶子张量）的梯度
+        info[self.key_for_gradient].retain_grad()   # .retain_grad()如果用于保留叶子张量的梯度，在.zero_grad()时仍会被清空
 
     def step_post_backward(
         self,
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Any],
-        step: int,
-        info: Dict[str, Any],
-        packed: bool = False,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],   # 高斯模型参数
+        optimizers: Dict[str, torch.optim.Optimizer],   # 其优化器
+        state: Dict[str, Any],  # 训练策略数据的 state
+        step: int,      # 当前训练的迭代次数
+        info: Dict[str, Any],   # 前向传播过程中存储的 数据
+        packed: bool = False,   # 是否为 packed 模式
     ):
-        """Callback function to be executed after the `loss.backward()` call."""
-        if step >= self.refine_stop_iter:
+        """回调函数，在在`loss.backward()`后执行"""
+        if step >= self.refine_stop_iter:   # > 增稠结束迭代次数，直接返回
             return
 
         self._update_state(params, state, info, packed=packed)
@@ -155,8 +131,8 @@ class DefaultStrategy(Strategy):
             step > self.refine_start_iter
             and step % self.refine_every == 0
             and step % self.reset_every >= self.pause_refine_after_reset
-        ):
-            # grow GSs
+        ):  # > 增稠开始迭代次数 && 每refine_every次迭代 && > 重置不透明度后需暂停增稠迭代次数
+            # 增稠
             n_dupli, n_split = self._grow_gs(params, optimizers, state, step)
             if self.verbose:
                 print(
@@ -164,7 +140,7 @@ class DefaultStrategy(Strategy):
                     f"Now having {len(params['means'])} GSs."
                 )
 
-            # prune GSs
+            # 剪枝
             n_prune = self._prune_gs(params, optimizers, state, step)
             if self.verbose:
                 print(
@@ -172,14 +148,14 @@ class DefaultStrategy(Strategy):
                     f"Now having {len(params['means'])} GSs."
                 )
 
-            # reset running stats
+            # 重置训练状态
             state["grad2d"].zero_()
             state["count"].zero_()
             if self.refine_scale2d_stop_iter > 0:
                 state["radii"].zero_()
             torch.cuda.empty_cache()
 
-        if step % self.reset_every == 0:
+        if step % self.reset_every == 0:    # 重置不透明度
             reset_opa(
                 params=params,
                 optimizers=optimizers,

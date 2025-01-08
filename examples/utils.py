@@ -10,13 +10,17 @@ from matplotlib import colormaps
 
 
 class CameraOptModule(torch.nn.Module):
-    """Camera pose optimization module."""
+    """
+    相机位姿优化模型
+        Embedding层：将 相机ID 映射到 特征向量
+    """
 
     def __init__(self, n: int):
         super().__init__()
         # Delta positions (3D) + Delta rotations (6D)
-        self.embeds = torch.nn.Embedding(n, 9)
+        self.embeds = torch.nn.Embedding(n, 9)  # Embedding层，每个训练相机的嵌入向量维度为9，对应 3个平移分量 和 6个旋转分量
         # Identity rotation in 6D representation
+        # 注册一个 identity 的缓冲区，包含一个 6D 旋转表示的单位矩阵（表示相机的初始位姿无旋转）
         self.register_buffer("identity", torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]))
 
     def zero_init(self):
@@ -49,22 +53,26 @@ class CameraOptModule(torch.nn.Module):
 
 
 class AppearanceOptModule(torch.nn.Module):
-    """Appearance optimization module."""
+    """
+    光照一致性优化模型：
+        1. Embedding层：将 相机ID 映射到 特征向量
+        2. MLP层：将 特征向量 映射到 颜色
+    """
 
     def __init__(
         self,
-        n: int,
-        feature_dim: int,
-        embed_dim: int = 16,
-        sh_degree: int = 3,
-        mlp_width: int = 64,
-        mlp_depth: int = 2,
+        n: int,     # 训练相机数量
+        feature_dim: int,       # 每个相机的特征向量的维度，32
+        embed_dim: int = 16,    # Embedding层的维度，16
+        sh_degree: int = 3,     # SH阶数
+        mlp_width: int = 64,    # MLP中间层的宽度
+        mlp_depth: int = 2,     # MLP中间层的深度
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.sh_degree = sh_degree
-        self.embeds = torch.nn.Embedding(n, embed_dim)
-        layers = []
+        self.embeds = torch.nn.Embedding(n, embed_dim)  # Embedding层，每个训练相机的嵌入向量的维度为 16，(n, 16)
+        layers = []     # (16+32+16 -> mlp_width) -> ReLU -> (mlp_width -> mlp_width) -> ReLU -> (mlp_width -> mlp_width) -> ReLU -> (mlp_width -> 3)
         layers.append(
             torch.nn.Linear(embed_dim + feature_dim + (sh_degree + 1) ** 2, mlp_width)
         )
@@ -73,6 +81,7 @@ class AppearanceOptModule(torch.nn.Module):
             layers.append(torch.nn.Linear(mlp_width, mlp_width))
             layers.append(torch.nn.ReLU(inplace=True))
         layers.append(torch.nn.Linear(mlp_width, 3))
+
         self.color_head = torch.nn.Sequential(*layers)
 
     def forward(

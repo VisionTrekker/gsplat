@@ -49,43 +49,44 @@ class Parser:
             colmap_dir
         ), f"COLMAP directory {colmap_dir} does not exist."
 
-        manager = SceneManager(colmap_dir)  # 实例化一个SceneManager对象，管理COLMAP项目 colmap_dir 中的文件和数据
+        manager = SceneManager(colmap_dir)  # 从pycolmap实例化一个SceneManager对象，管理 sparse/0 文件夹中的数据
         manager.load_cameras()  # 读取内参 cameras.bin
         manager.load_images()   # 读取外参 images.bin
         manager.load_points3D() # 读取3D点云 points.bin
 
-        # 读取 所有图像的外参矩阵（转换成 W2C）
-        imdata = manager.images
-        w2c_mats = []       # 所有图像的 W2C变换矩阵
-        camera_ids = []     # 所有图像的 相机ID
-        Ks_dict = dict()    # 所有相机 经下采样倍率调整后的 内参矩阵
-        params_dict = dict()    # 所有相机 的畸变参数
-        imsize_dict = dict()    # 所有相机 经下采样倍率调整后的 宽高
-        mask_dict = dict()      # 所有相机 的mask，默认为None
+        imdata = manager.images # 读取 所有COLMAP图像的 外参矩阵（转换成 W2C）
+
+        w2c_mats = []       # 存储 所有COLMAP图像的 W2C变换矩阵 (4,4)
+        camera_ids = []     # 存储 所有COLMAP图像的 相机ID
+        Ks_dict = dict()        # 存储 所有COLMAP相机 经图像下采样后的 内参矩阵
+        params_dict = dict()    # 存储 所有COLMAP相机的 畸变参数
+        imsize_dict = dict()    # 存储 所有COLMAP相机 经图像下采样后的 图像宽、高
+        mask_dict = dict()      # 存储 所有COLMAP相机的 mask，默认为 None
         bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
-        # 遍历所有图像外参
+
+        # 遍历所有COLMAP图像 外参
         for k in imdata:
             im = imdata[k]
             rot = im.R()
             trans = im.tvec.reshape(3, 1)
-            w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0) # W2C的变换矩阵 (4,4)
+            w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0) # 当前COLMAP图像的 W2C的变换矩阵 (4,4)
             w2c_mats.append(w2c)
 
             # 支持多个相机
-            camera_id = im.camera_id    # 当前图像的相机ID，每个图像都有一个相机ID，可以是相同的相机
+            camera_id = im.camera_id    # 当前COLMAP图像对应的 相机ID。每个图像都有一个相机ID，不同图像可对应同一相机
             camera_ids.append(camera_id)
 
-            # 获取 当前图像对应相机的内参
-            cam = manager.cameras[camera_id]
+            cam = manager.cameras[camera_id]    # 当前COLMAP图像对应相机的 内参
             fx, fy, cx, cy = cam.fx, cam.fy, cam.cx, cam.cy
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-            K[:2, :] /= factor  # fx，fy，cx，cy 都要除以 factor
+
+            K[:2, :] /= factor      # 原内参矩阵 ==> 图像下采样后的 内参（fx，fy，cx，cy 都要除以 factor）
             Ks_dict[camera_id] = K
 
-            # 获取 相机畸变参数
-            type_ = cam.camera_type     # 当前相机的 模型类型
+            # 获取 当前COLMAP图像对应相机的 畸变参数
+            type_ = cam.camera_type     # 相机模型
             if type_ == 0 or type_ == "SIMPLE_PINHOLE":
-                params = np.empty(0, dtype=np.float32)
+                params = np.empty(0, dtype=np.float32)  # 畸变参数
                 camtype = "perspective"
             elif type_ == 1 or type_ == "PINHOLE":
                 params = np.empty(0, dtype=np.float32)
@@ -107,26 +108,35 @@ class Parser:
             ), f"Only perspective and fisheye cameras are supported, got {type_}"
 
             params_dict[camera_id] = params
-            imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
+
+            # 计算 当前COLMAP图像对应相机 经图像下采样后的 图像尺寸
+            if isinstance(factor, int):
+                imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
+            elif isinstance(factor, float): # 应对factor为浮点数的情况
+                imsize_dict[camera_id] = (int(cam.width / factor), int(cam.height / factor))
+            else:
+                raise TypeError("[COLMAP Parser] factor must be either an int or a float")
+
+            # 当前COLMAP图像对应相机的 mask，默认为None
             mask_dict[camera_id] = None
+
         print(
             f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras."
         )
 
-        if len(imdata) == 0:
+        if len(imdata) == 0:    # 无COLMAP信息，报错
             raise ValueError("No images found in COLMAP.")
-        if not (type_ == 0 or type_ == 1):
+        if not (type_ == 0 or type_ == 1):  # COLMAP相机不是 "SIMPLE_PINHOLE" 或 "PINHOLE"，则警告
             print("Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
 
-        w2c_mats = np.stack(w2c_mats, axis=0)   # (N,4,4)
+        w2c_mats = np.stack(w2c_mats, axis=0)
 
-        camtoworlds = np.linalg.inv(w2c_mats)   # 所有图像的 C2W变换矩阵
+        camtoworlds = np.linalg.inv(w2c_mats)   # 所有COLMAP图像的 C2W变换矩阵 (N,4,4)
 
-        # 获取所有图片名。不再需要根据图片名对位姿进行排序
+        # 所有COLMAP图像名称
         image_names = [imdata[k].name for k in imdata]
 
-        # 之前的 NeRF 结果是按照文件名排序生成的，确保在相同的测试集上报告指标
-        # 根据图片名排序后的 图像名、位姿C2W、相机ID
+        # 根据图像名排序后的 所有COLMAP图像的 图像名、C2W位姿、相机ID（之前的 NeRF 结果是按照文件名排序生成的，确保在相同的测试集上测试指标）
         inds = np.argsort(image_names)  # 对image_names排序后的索引
         image_names = [image_names[i] for i in inds]
         camtoworlds = camtoworlds[inds]
@@ -138,15 +148,14 @@ class Parser:
             "no_factor_suffix": False,  # 是否去除后缀
         }
         extconf_file = os.path.join(data_dir, "ext_metadata.json")
-        if os.path.exists(extconf_file):
-            # 如果存在扩展数据，则用其更新 extconf
+        if os.path.exists(extconf_file):    # 如果存在扩展数据，则用其更新 extconf
             with open(extconf_file) as f:
                 self.extconf.update(json.load(f))
 
         # 加载 场景边界（只使用于前向场景）
         self.bounds = np.array([0.01, 1.0])
         posefile = os.path.join(data_dir, "poses_bounds.npy")
-        if os.path.exists(posefile):
+        if os.path.exists(posefile):    # 如果存在 场景边界 数据，则用其更新 bounds
             self.bounds = np.load(posefile)[:, -2:]
 
         # 加载 图像
@@ -161,39 +170,42 @@ class Parser:
             if not os.path.exists(d):
                 raise ValueError(f"Image folder {d} does not exist.")
 
-        # 获取GS使用的图像路径
-        colmap_files = sorted(_get_rel_paths(colmap_image_dir)) # garden/images下所有图像的 相对路径
-        image_files = sorted(_get_rel_paths(image_dir))         # garden/images_2下所有图像的 相对路径
+        colmap_files = sorted(_get_rel_paths(colmap_image_dir)) # garden/images   下所有图像的 相对路径
+        image_files = sorted(_get_rel_paths(image_dir))         # garden/images_2 下所有图像的 相对路径
         colmap_to_image = dict(zip(colmap_files, image_files))
-        image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]    # 重映射图像路径，garden/images_2/000000.jpg
 
-        # 获取 3D点云 和 每个图像中与点云关联的3D点索引{image_name -> [point_idx]}
-        points = manager.points3D.astype(np.float32)
-        points_err = manager.point3D_errors.astype(np.float32)  # 点云的 重投影误差
-        points_rgb = manager.point3D_colors.astype(np.uint8)    # 点云的 颜色
+        # GS图像路径：COLMAP图像名（实际在images中存在的）映射到 GS图像路径，如garden/images_2/000000.jpg
+        image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names if os.path.exists(os.path.join(colmap_image_dir, f))]
+        # 检查 所有计算的COLMAP图像 与 实际存在的GS图像 数量是否一致
+        assert len(image_paths) == len(image_names), "len(image_paths) != len(image_names), some images are missing in the COLMAP image folder."
+
+        # 所有3D点的 世界坐标、重投影误差、RGB颜色
+        points = manager.points3D.astype(np.float32)    # 所有3D点的 世界坐标 (M, 3)
+        points_err = manager.point3D_errors.astype(np.float32)  # 所有3D点的 重投影误差 (M,)
+        points_rgb = manager.point3D_colors.astype(np.uint8)    # 所有3D点的 RGB颜色 (M, 3)
+
+        # 图像名 -> 看到的所有3D点在点云中的索引，{image_name -> [point_idx]}
         point_indices = dict()  # {"image_name_1.jpg": [point_idx_1, point_idx_2, ...], "image_name_2.jpg": [point_idx_3, point_idx_4, ...], ...}
-
-        # 创建一个字典，将图像ID映射到图像名
-        image_id_to_name = {v: k for k, v in manager.name_to_image_id.items()}  # manager.name_to_image_id 表示图像名与图像ID的映射
-        # 遍历每个3D点，获取观测到该3D点的 相关图像数据
-        for point_id, data in manager.point3D_id_to_images.items(): # manager.point3D_id_to_images 表示每个3D点 被观测到的图像ID 以及 对应特征点的索引
+        # 图像ID -> 图像名
+        image_id_to_name = {v: k for k, v in manager.name_to_image_id.items()}  # manager.name_to_image_id：图像名 -> 图像ID
+        # 遍历每个3D点，获取观测到该3D点的 图像数据
+        for point_id, data in manager.point3D_id_to_images.items(): # manager.point3D_id_to_images：3D点ID -> List存储着：看到该3D点的图像IDs 及 该3D点在对应图像的2D点索引
             # 遍历每个观测到该3D点的图像，将该3D点在点云中的索引添加到 对应图像的列表中
             for image_id, _ in data:
                 image_name = image_id_to_name[image_id]
-                point_idx = manager.point3D_id_to_point3D_idx[point_id]     # 将3D点ID 映射到 点云中3D点的索引，用于直接访问点云数据
-                point_indices.setdefault(image_name, []).append(point_idx)  # 在point_indices中为每个图像名初始化一个空list，并添加该3D点索引
+                point_idx = manager.point3D_id_to_point3D_idx[point_id]     # 3D点ID -> 点云中3D点的索引，用于直接访问点云数据
+                point_indices.setdefault(image_name, []).append(point_idx)  # 在 point_indices 中为每个 图像名 初始化一个空list，并添加该3D点在点云中的索引
         point_indices = {
-            k: np.array(v).astype(np.int32) for k, v in point_indices.items()   # 将3D点索引列表 转换为 NumPy数组并指定数据类型为 int32，提高存储效率和兼容性
+            k: np.array(v).astype(np.int32) for k, v in point_indices.items()   # 将3D点索引列表 转换为 NumPy数组，并指定数据类型为 int32，提高存储效率和兼容性
         }
 
-        # Normalize the world space.
+        # 归一化场景
         if normalize:
-            # 如果要进行归一化处理，先计算 所有相机坐标轴 与 世界坐标轴 对齐的变换矩阵，再计算点云对齐到其主轴（Z轴）的 变换矩阵，并应用于 所有相机位姿与点云
-            T1 = similarity_from_cameras(camtoworlds)   # 计算 所有图像的相机坐标轴 与 世界坐标轴 对齐的变换矩阵，(4,4)
-            camtoworlds = transform_cameras(T1, camtoworlds)    # 变换所有相机坐标轴
-            points = transform_points(T1, points)   # 变换所有3D点云
+            T1 = similarity_from_cameras(camtoworlds)   # 场景归一化到单位尺度的 相似变换矩阵（场景的up轴对齐到世界Z轴，场景中心平移到坐标原点，归一化场景大小到单位尺度），(4,4)
+            camtoworlds = transform_cameras(T1, camtoworlds)    # 变换所有相机位姿
+            points = transform_points(T1, points)               # 变换所有3D点位姿
 
-            T2 = align_principle_axes(points)   # 计算点云对齐到其主轴（Z轴）的 变换矩阵
+            T2 = align_principle_axes(points)   # 点云最大主方向 对齐到 世界坐标系Z轴的 仿射变换矩阵
             camtoworlds = transform_cameras(T2, camtoworlds)
             points = transform_points(T2, points)
 
@@ -201,34 +213,36 @@ class Parser:
         else:
             transform = np.eye(4)
 
-        self.image_names = image_names  # 所有图像的 图片名，List[str], (num_images,)
-        self.image_paths = image_paths  # GS要使用的所有图像的 相对路径，例garden/images_2/000000.jpg，List[str], (num_images,)
-        self.camtoworlds = camtoworlds  # 变换后的 所有图像的 C2W位姿，np.ndarray, (num_images, 4, 4)
-        self.camera_ids = camera_ids    # 所有相机ID，多个图像可以是同一个相机ID，即来自于相同的相机，List[int], (num_images,)
-        self.Ks_dict = Ks_dict      # 所有相机 经下采样倍率调整后的 内参矩阵，Dict of camera_id -> K
-        self.params_dict = params_dict  # 所有相机的 畸变参数，Dict of camera_id -> params
-        self.imsize_dict = imsize_dict  # 所有相机 经下采样倍率调整后的 宽高，Dict of camera_id -> (width, height)
-        self.mask_dict = mask_dict  # 所有相机的 mask，默认为None，Dict of camera_id -> mask
-        self.points = points    # 变换后的 所有点云，np.ndarray, (num_points, 3)
-        self.points_err = points_err  # 所有点云的 重投影误差，np.ndarray, (num_points,)
-        self.points_rgb = points_rgb  # 所有点云的 颜色，np.ndarray, (num_points, 3)
-        self.point_indices = point_indices  # 所有图像 与其 对应的所有3D点的索引，Dict[str, np.ndarray], image_name -> [M,]
-        self.transform = transform    # 变换矩阵，np.ndarray, (4, 4)
+        self.image_names = image_names  # 所有COLMAP图像的 图像名（根据图像名排序后的 ）                      List[str], (num_images,)
+        self.image_paths = image_paths  # 所有GS图像的 相对路径，例 garden/images_2/000000.jpg             List[str], (num_images,)
+        self.camtoworlds = camtoworlds  # 所有COLMAP图像的 C2W变换矩阵（根据图像名排序后的及 可能归一化后的）     np.ndarray, (num_images, 4, 4)
+        self.camera_ids = camera_ids    # 所有COLMAP图像的 相机ID（根据图像名排序后的，多个图像可对应同一相机ID）  List[int], (num_images,)
+        self.Ks_dict = Ks_dict          # 所有COLMAP相机 经图像下采样后 去畸变后的 内参矩阵                    Dict of camera_id -> K
+        self.params_dict = params_dict  # 所有COLMAP相机的 畸变参数                                        Dict of camera_id -> params
+        self.imsize_dict = imsize_dict  # 所有COLMAP相机 经图像下采样后 去畸变后的 图像宽、高                   Dict of camera_id -> (width, height)
+        self.mask_dict = mask_dict      # 所有COLMAP相机 经去畸变后的 mask，默认为None                       Dict of camera_id -> mask
+        self.points = points            # 所有3D点的 世界坐标（可能归一化后的）                               np.ndarray, (num_points, 3)
+        self.points_err = points_err    # 所有3D点的 重投影误差                                            np.ndarray, (num_points,)
+        self.points_rgb = points_rgb    # 所有3D点的 RGB颜色 (M, 3)                                       np.ndarray, (num_points, 3)
+        self.point_indices = point_indices  # 所有COLMAP图像名 -> 观测到的所有3D点在点云中的索引               Dict[image_name, np.ndarray[point_idx1, point_idx2, ...]], [M,]
+        self.transform = transform      # 已对所有相机和点云作变换的 变换矩阵                                 np.ndarray, (4, 4)
 
         # load one image to check the size. In the case of tanksandtemples dataset, the
         # intrinsics stored in COLMAP corresponds to 2x upsampled images.
+        # 再根据GS图像的实际尺寸调整所有COLMAP相机的 内参矩阵 和 相机宽、高
         actual_image = imageio.imread(self.image_paths[0])[..., :3]
-        actual_height, actual_width = actual_image.shape[:2]
-        colmap_width, colmap_height = self.imsize_dict[self.camera_ids[0]]
+        actual_height, actual_width = actual_image.shape[:2]    # 实际加载的GS图像宽、高
+        colmap_width, colmap_height = self.imsize_dict[self.camera_ids[0]]  # COLMAP相机 经图像下采样后的 图像宽、高
         s_height, s_width = actual_height / colmap_height, actual_width / colmap_width
         for camera_id, K in self.Ks_dict.items():
-            K[0, :] *= s_width
+            K[0, :] *= s_width  # K * (W_actual / W_colmap)
             K[1, :] *= s_height
             self.Ks_dict[camera_id] = K
+
             width, height = self.imsize_dict[camera_id]
             self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
 
-        # undistortion
+        # 遍历每个COLMAP相机的 畸变参数，计算：畸变映射图，去畸变后的 内参矩阵、图像尺寸、mask
         self.mapx_dict = dict()
         self.mapy_dict = dict()
         self.roi_undist_dict = dict()
@@ -290,18 +304,19 @@ class Parser:
             else:
                 assert_never(camtype)
 
-            self.mapx_dict[camera_id] = mapx
+            # 有畸变参数的话
+            self.mapx_dict[camera_id] = mapx    # 所有COLMAP相机的 畸变映射图
             self.mapy_dict[camera_id] = mapy
-            self.Ks_dict[camera_id] = K_undist
+            self.Ks_dict[camera_id] = K_undist  # 所有COLMAP相机 经图像下采样后 去畸变后的 内参矩阵
             self.roi_undist_dict[camera_id] = roi_undist
-            self.imsize_dict[camera_id] = (roi_undist[2], roi_undist[3])
-            self.mask_dict[camera_id] = mask
+            self.imsize_dict[camera_id] = (roi_undist[2], roi_undist[3])    # 所有COLMAP相机 经图像下采样后 去畸变后的 图像宽、高
+            self.mask_dict[camera_id] = mask    # 所有COLMAP相机 经去畸变后的 mask，默认为None
 
-        # size of the scene measured by cameras
-        camera_locations = camtoworlds[:, :3, 3]
+        # 计算场景大小（相机范围半径）
+        camera_locations = camtoworlds[:, :3, 3]    # 所有COLMAP图像的 C2W位置
         scene_center = np.mean(camera_locations, axis=0)
-        dists = np.linalg.norm(camera_locations - scene_center, axis=1)
-        self.scene_scale = np.max(dists)
+        dists = np.linalg.norm(camera_locations - scene_center, axis=1) # 计算所有图像到 场景中心的 欧几里得距离（L2范数）
+        self.scene_scale = np.max(dists)    # 场景大小 = 所有图像 到 场景中心 距离的 最大值
 
 
 class Dataset:
@@ -314,30 +329,33 @@ class Dataset:
         patch_size: Optional[int] = None,
         load_depths: bool = False,
     ):
-        self.parser = parser
-        self.split = split
-        self.patch_size = patch_size
-        self.load_depths = load_depths
-        indices = np.arange(len(self.parser.image_names))
-        if split == "train":
-            self.indices = indices[indices % self.parser.test_every != 0]
-        else:
+        self.parser = parser    # COLMAP Parser
+        self.split = split      # 数据划分类型，"train"或"test"
+        self.patch_size = patch_size    # 随机裁剪的 图像尺寸
+        self.load_depths = load_depths  # 是否使用 depth_loss，需将3D点投影到图像平面 获取GT深度
+
+        indices = np.arange(len(self.parser.image_paths))   # 所有GS图像的 相对路径（Parser中已检查 所有计算的COLMAP图像 与 实际存在的GS图像数量一致）
+        if split == "train":    # 训练 Dataset
+            # self.indices = indices[indices % self.parser.test_every != 0]
+            self.indices = indices  # 使用全部图像训练
+        else:   # 测试 Dataset
             self.indices = indices[indices % self.parser.test_every == 0]
+            # self.indices = [indices for indices in range(5, 30, 5)] # 与原始3DGS测试一致
+        print("Total images: {}, [{}] images: {}".format(len(indices), split, len(self.indices)))
 
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
-        image = imageio.imread(self.parser.image_paths[index])[..., :3]
-        camera_id = self.parser.camera_ids[index]
-        K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
-        params = self.parser.params_dict[camera_id]
-        camtoworlds = self.parser.camtoworlds[index]
-        mask = self.parser.mask_dict[camera_id]
+        image = imageio.imread(self.parser.image_paths[index])[..., :3]     # 读取该张GS图像
+        camera_id = self.parser.camera_ids[index]       # 当前图像的 相机ID
+        camtoworlds = self.parser.camtoworlds[index]    # 当前图像的 C2W位姿
+        K = self.parser.Ks_dict[camera_id].copy()       # 对应相机的 经图像下采样后 去畸变后的 内参矩阵
+        params = self.parser.params_dict[camera_id]     # 对应相机的 畸变参数
+        mask = self.parser.mask_dict[camera_id]         # 对应相机的 经去畸变后的 mask
 
-        if len(params) > 0:
-            # Images are distorted. Undistort them.
+        if len(params) > 0:     # 存在畸变参数，对图像去畸变
             mapx, mapy = (
                 self.parser.mapx_dict[camera_id],
                 self.parser.mapy_dict[camera_id],
@@ -346,35 +364,35 @@ class Dataset:
             x, y, w, h = self.parser.roi_undist_dict[camera_id]
             image = image[y : y + h, x : x + w]
 
-        if self.patch_size is not None:
-            # Random crop.
+        if self.patch_size is not None:     # 设定了patch_size，则根据其尺寸随机裁剪图像
             h, w = image.shape[:2]
             x = np.random.randint(0, max(w - self.patch_size, 1))
             y = np.random.randint(0, max(h - self.patch_size, 1))
             image = image[y : y + self.patch_size, x : x + self.patch_size]
+            # 主点 cx, cy 也相应改变
             K[0, 2] -= x
             K[1, 2] -= y
 
+        # 封装数据，转为tensor：相机内参矩阵、C2W位姿、图像、该图像在Dataset中的索引、该图像观测到的3D点的 像素坐标、对应像素的深度
         data = {
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
             "image_id": item,  # the index of the image in the dataset
         }
-        if mask is not None:
+        if mask is not None:    # 如果存在mask，则将其转换为bool类型的tensor
             data["mask"] = torch.from_numpy(mask).bool()
 
-        if self.load_depths:
-            # projected points to image plane to get depths
+        if self.load_depths:    # 若使用 depth_loss，则将3D点云投影到图像平面 获取其深度
             worldtocams = np.linalg.inv(camtoworlds)
             image_name = self.parser.image_names[index]
-            point_indices = self.parser.point_indices[image_name]
-            points_world = self.parser.points[point_indices]    # 当前图像的3D点
-            points_cam = (worldtocams[:3, :3] @ points_world.T + worldtocams[:3, 3:4]).T
-            points_proj = (K @ points_cam.T).T  # 归一化平面
+            point_indices = self.parser.point_indices[image_name]   # 当前图像观测到的 所有3D点在点云中的索引
+            points_world = self.parser.points[point_indices]        # 当前图像观测到的 3D点
+            points_cam = (worldtocams[:3, :3] @ points_world.T + worldtocams[:3, 3:4]).T    # 相机坐标系
+            points_proj = (K @ points_cam.T).T      # 归一化平面
             points = points_proj[:, :2] / points_proj[:, 2:3]  # 像素平面坐标，(M, 2)
-            depths = points_cam[:, 2]  # 深度值，(M,)
-            # filter out points outside the image
+            depths = points_cam[:, 2]       # 深度值，(M,)
+            # 筛选在图像范围内 且 深度>0 的点
             selector = (
                 (points[:, 0] >= 0)
                 & (points[:, 0] < image.shape[1])
@@ -384,8 +402,8 @@ class Dataset:
             )
             points = points[selector]
             depths = depths[selector]
-            data["points"] = torch.from_numpy(points).float()
-            data["depths"] = torch.from_numpy(depths).float()
+            data["points"] = torch.from_numpy(points).float()   # 当前图像观测到的3D点的 像素坐标
+            data["depths"] = torch.from_numpy(depths).float()   # 对应像素的 深度
 
         return data
 

@@ -18,6 +18,7 @@ class Strategy:
         optimizers: Dict[str, torch.optim.Optimizer],
     ):
         """Sanity check for the parameters and optimizers."""
+        # 1. 优化器中的参数 必须和 高斯模型中需计算梯度的参数一一对应
         trainable_params = set(
             [name for name, param in params.items() if param.requires_grad]
         )
@@ -25,7 +26,7 @@ class Strategy:
             "trainable parameters and optimizers must have the same keys, "
             f"but got {trainable_params} and {optimizers.keys()}"
         )
-
+        # 2. 每个参数对应的 优化器 有且只有一个参数组 param_groups
         for optimizer in optimizers.values():
             assert len(optimizer.param_groups) == 1, (
                 "Each optimizer must have exactly one param_group, "
